@@ -1,16 +1,62 @@
+import AuthHeader from "@/components/AuthHeader";
+import PasswordField from "@/components/PasswordField";
+import { AppleButton, GoogleButton } from "@/components/SocialButtons";
+import { authErrorToAlertMessage } from "@/lib/authError";
+import { startGuest } from "@/lib/authGuest";
+import { signInWithApple, signInWithGoogle } from "@/lib/oauth";
+import { useSession } from "@/lib/session";
+import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
-import { useState } from "react";
-import { Alert, Pressable, Text, TextInput, View } from "react-native";
+import { useCallback, useState } from "react";
+import {
+  Alert,
+  BackHandler,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { supabase } from "../../lib/supabase";
-import AuthHeader from "../components/AuthHeader";
-import PasswordField from "../components/PasswordField";
 
 export default function Login() {
+  const { setIsGuest } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const key = showPw ? "login-show" : "login-hide";
+  const [busy, setBusy] = useState<null | "google" | "apple">(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => true);
+      return () => sub.remove();
+    }, []),
+  );
+
+  async function onGoogle() {
+    if (busy) return;
+    setBusy("google");
+    try {
+      await signInWithGoogle();
+    } catch (e: any) {
+      Alert.alert("Google sign-in failed", e?.message ?? "Try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onApple() {
+    if (busy) return;
+    setBusy("apple");
+    try {
+      await signInWithApple();
+    } catch (e: any) {
+      Alert.alert("Apple sign-in failed", e?.message ?? "Try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function onLogin() {
     try {
@@ -19,11 +65,15 @@ export default function Login() {
       if (!password)
         return Alert.alert("Missing password", "Please enter your password.");
       setLoading(true);
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { error, data } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
-      if (error) throw error;
+      if (error) {
+        Alert.alert("Can’t sign in", authErrorToAlertMessage(error.message));
+        return;
+      }
+      // if (error) throw error;
       if (!data?.session)
         return Alert.alert("Sign in", "Signed in but no session returned.");
       router.replace("/(tabs)");
@@ -32,6 +82,12 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function onContinueAsGuest() {
+    await startGuest();
+    setIsGuest(true);
+    router.replace("/(tabs)");
   }
 
   return (
@@ -115,7 +171,7 @@ export default function Login() {
       </View>
 
       <Pressable
-        onPress={() => router.replace("/(tabs)")}
+        onPress={onContinueAsGuest}
         style={({ pressed }) => ({
           opacity: pressed ? 0.6 : 1,
           padding: 12,
@@ -128,6 +184,11 @@ export default function Login() {
       >
         <Text style={{ fontWeight: "600" }}>Continue as guest</Text>
       </Pressable>
+
+      <View style={{ height: 8 }} />
+      <GoogleButton onPress={onGoogle} disabled={!!busy} />
+      <View style={{ height: 8 }} />
+      <AppleButton onPress={onApple} disabled={!!busy} />
     </View>
   );
 }

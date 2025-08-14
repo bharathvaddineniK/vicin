@@ -1,10 +1,12 @@
+import AuthHeader from "@/components/AuthHeader";
+import PasswordField from "@/components/PasswordField";
+import { AppleButton, GoogleButton } from "@/components/SocialButtons";
+import { signInWithApple, signInWithGoogle } from "@/lib/oauth";
 import { assessPassword } from "@/lib/passwordStrength";
 import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Pressable, Switch, Text, TextInput, View } from "react-native";
 import { supabase } from "../../lib/supabase";
-import AuthHeader from "../components/AuthHeader";
-import PasswordField from "../components/PasswordField";
 
 const REDIRECT = "vicinapp://confirm";
 
@@ -19,6 +21,32 @@ export default function Signup() {
   const [resending, setResending] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const timer = useRef<NodeJS.Timeout | null>(null);
+  const [busy, setBusy] = useState<null | "google" | "apple">(null);
+  const link = { color: "#2563EB", fontWeight: "600" } as const;
+
+  async function onGoogle() {
+    if (busy) return;
+    setBusy("google");
+    try {
+      await signInWithGoogle();
+    } catch (e: any) {
+      Alert.alert("Google sign-in failed", e?.message ?? "Try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onApple() {
+    if (busy) return;
+    setBusy("apple");
+    try {
+      await signInWithApple();
+    } catch (e: any) {
+      Alert.alert("Apple sign-in failed", e?.message ?? "Try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   function startCooldown(seconds = 30) {
     setCooldown(seconds);
@@ -201,9 +229,26 @@ export default function Signup() {
           trackColor={{ false: "#cbd5e1", true: "#93c5fd" }}
           thumbColor={accept ? "#2563eb" : "#f8fafc"}
         />
-        <Text>
-          I accept the <Text style={{ color: "#2563eb" }}>Terms</Text> &{" "}
-          <Text style={{ color: "#2563eb" }}>Privacy</Text>.
+        <Text style={{ color: "#334155" }}>
+          I accept the{" "}
+          <Text
+            onPress={() => router.push("/legal/terms")}
+            style={link}
+            accessibilityRole="link"
+            accessibilityLabel="Open Terms and Conditions"
+          >
+            Terms
+          </Text>{" "}
+          &{" "}
+          <Text
+            onPress={() => router.push("/legal/privacy")}
+            style={link}
+            accessibilityRole="link"
+            accessibilityLabel="Open Privacy Policy"
+          >
+            Privacy
+          </Text>
+          .
         </Text>
       </View>
 
@@ -273,6 +318,9 @@ export default function Signup() {
           <Text style={{ color: "#2563eb", fontWeight: "600" }}>Sign in</Text>
         </Pressable>
       </View>
+      <GoogleButton onPress={onGoogle} disabled={!!busy} />
+      <View style={{ height: 8 }} />
+      <AppleButton onPress={onApple} disabled={!!busy} />
     </View>
   );
 }
