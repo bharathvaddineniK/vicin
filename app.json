@@ -16,7 +16,8 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.bkumarvaddineni.vicinapp"
     },
     "web": {
       "bundler": "metro",
@@ -37,6 +38,21 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "deeplinks": [
+      {
+        "scheme": "vicin",
+        "path": "auth-callback",
+        "query": {},
+        "resetOnTap": true
+      }
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "9573c6f5-f50d-482d-a6b1-d90ca9d527f9"
+      }
+    },
+    "owner": "bkumarvaddineni"
   }
 }
