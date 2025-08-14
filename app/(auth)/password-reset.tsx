@@ -1,9 +1,9 @@
+import PasswordField from "@/components/PasswordField";
 import { assessPassword } from "@/lib/passwordStrength";
 import { router } from "expo-router";
 import { useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
 import { supabase } from "../../lib/supabase";
-import PasswordField from "../components/PasswordField";
 
 export default function PasswordResetFinish() {
   const [newPw, setNewPw] = useState("");
