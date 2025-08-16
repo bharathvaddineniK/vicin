@@ -10,12 +10,16 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.yourco.vicin"
+      "bundleIdentifier": "com.yourco.vicin",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Vicin uses your location to show nearby posts and events."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#ffffff",
+        "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]
       },
       "edgeToEdgeEnabled": true,
       "package": "com.bkumarvaddineni.vicinapp"

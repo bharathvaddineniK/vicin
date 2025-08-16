@@ -1,6 +1,7 @@
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
-import { isGuestCached, isGuestNow } from "./authGuest";
+import { endGuest, isGuestCached, isGuestNow } from "./authGuest";
+import { migrateGuestPrefsToProfile } from "./migrateGuest";
 import { supabase } from "./supabase";
 
 export function useSession() {
@@ -29,9 +30,17 @@ export function useSession() {
     );
 
     const { data: sub } = supabase.auth.onAuthStateChange(
-      (_event: AuthChangeEvent, s: Session | null) => {
+      async (_event: AuthChangeEvent, s: Session | null) => {
         if (!mounted) return;
+        const hadNoSession = !session;
         setSession(s);
+        if (s) {
+          endGuest().catch(() => {});
+          setIsGuest(false);
+        }
+        if (s && hadNoSession) {
+          await migrateGuestPrefsToProfile();
+        }
       },
     );
 

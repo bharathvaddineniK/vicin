@@ -1,3 +1,4 @@
+import { ensureMyProfile } from "@/lib/profile"; // 👈 add
 import type { Href } from "expo-router";
 import { SplashScreen, Stack, useRouter } from "expo-router";
 import { useEffect, useRef } from "react";
@@ -15,25 +16,40 @@ export default function RootLayout() {
     if (loading) return;
 
     const go = async () => {
+      // If signed in (not guest), ensure profile is initialized and completed
+      if (session) {
+        const me = await ensureMyProfile();
+        const needsProfile = !me?.display_name || !me?.handle;
+        if (needsProfile) {
+          if (currentRoot.current !== "/(onboarding)/profile") {
+            currentRoot.current = "/(onboarding)/profile";
+            router.replace("/(onboarding)/profile" as Href);
+          }
+          SplashScreen.hideAsync().catch(() => {});
+          return;
+        }
+      }
+
+      // Any stored deep link intent for authed/guest users
       if (session || isGuest) {
-        // If a protected deep link was attempted, honor it once
         const intentUrl = await popIntent();
         if (intentUrl) {
           const internal = toInternalPath(intentUrl);
           if (internal) {
-            router.replace(internal as Href); // ✅ cast to Href
+            router.replace(internal as Href);
             SplashScreen.hideAsync().catch(() => {});
             currentRoot.current = "INTENT";
             return;
           }
         }
       }
+
+      // Default root
       const isAuthed = !!session || isGuest;
-      // Otherwise go to the default root
       const nextRoot = isAuthed ? "/(tabs)" : "/(auth)/login";
       if (currentRoot.current !== nextRoot) {
         currentRoot.current = nextRoot;
-        router.replace(nextRoot);
+        router.replace(nextRoot as Href);
       }
       SplashScreen.hideAsync().catch(() => {});
     };
@@ -45,7 +61,7 @@ export default function RootLayout() {
     <Stack screenOptions={{ headerShown: false }}>
       {/* Auth */}
       <Stack.Screen name="(auth)/login" options={{ gestureEnabled: false }} />
-      <Stack.Screen name="(auth)/signup" />
+      <Stack.Screen name="(auth)/signup" options={{ gestureEnabled: false }} />
       <Stack.Screen name="(auth)/reset" />
       <Stack.Screen
         name="(auth)/password-reset"
@@ -57,8 +73,11 @@ export default function RootLayout() {
         name="(auth)/oauth-callback"
         options={{ animation: "none" }}
       />
+      {/* Onboarding */}
+      <Stack.Screen name="(onboarding)/profile" />
       {/* App */}
-      {/* <Stack.Screen name="(tabs)/index" /> */}
+      <Stack.Screen name="(tabs)" options={{ gestureEnabled: false }} />
+      <Stack.Screen name="(tabs)/index" options={{ gestureEnabled: false }} />
       <Stack.Screen name="index" />
       {/* Legal */}
       <Stack.Screen name="legal/terms" />
