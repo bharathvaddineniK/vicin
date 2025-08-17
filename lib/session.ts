@@ -12,7 +12,7 @@ export function useSession() {
   useEffect(() => {
     (async () => {
       const g = await isGuestNow();
-      console.log("[Guest] persisted?", g);
+      // console.log("[Guest] persisted?", g);
     })();
   }, []);
 
@@ -25,7 +25,7 @@ export function useSession() {
         setSession(data.session ?? null);
         setIsGuest(g);
         setLoading(false);
-        console.log("[Gate] initial session?", !!data.session, "guest?", g);
+        // console.log("[Gate] initial session?", !!data.session, "guest?", g);
       },
     );
 

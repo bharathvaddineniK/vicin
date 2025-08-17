@@ -26,11 +26,11 @@ function getRedirectUri() {
   const isExpoGo = Constants.appOwnership === "expo";
   if (isExpoGo) {
     const uri = getExpoProxyRedirectUri();
-    console.log("[OAuth] Redirect (proxy, stable):", uri);
+    // console.log("[OAuth] Redirect (proxy, stable):", uri);
     return uri;
   }
   const uri = Linking.createURL("oauth-callback", { scheme: APP_SCHEME });
-  console.log("[OAuth] Redirect (scheme):", uri);
+  // console.log("[OAuth] Redirect (scheme):", uri);
   return uri;
 }
 
@@ -44,7 +44,7 @@ async function openProviderUrl(
     showInRecents: true,
     preferEphemeralSession: !!opts?.ephemeral, // iOS: avoids staying signed in the browser
   });
-  console.log("[OAuth] browser result:", result.type);
+  // console.log("[OAuth] browser result:", result.type);
   // Result types: "success" (deep link consumed), "dismiss", "cancel"
   return result;
 }
@@ -60,7 +60,7 @@ export async function signInWithGoogle() {
     },
   });
   if (error) {
-    console.log("[OAuth] Google error:", error.message);
+    // console.log("[OAuth] Google error:", error.message);
     throw error;
   }
   const authUrl = data?.url;
@@ -75,7 +75,7 @@ export async function signInWithApple() {
     options: { redirectTo },
   });
   if (error) {
-    console.log("[OAuth] Apple error:", error.message);
+    // console.log("[OAuth] Apple error:", error.message);
     throw error;
   }
   const authUrl = data?.url;

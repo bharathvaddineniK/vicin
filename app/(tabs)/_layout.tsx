@@ -1,8 +1,10 @@
 // app/(tabs)/_layout.tsx
+import TabIcon from "@/components/TabIcon";
 import { useSession } from "@/lib/session";
-import { Tabs, useRouter } from "expo-router";
+import { useTheme } from "@react-navigation/native";
+import { router, Tabs } from "expo-router";
 import { useEffect } from "react";
-import { BackHandler, Text } from "react-native";
+import { BackHandler, Platform, Text } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 // simple label component
@@ -10,10 +12,16 @@ function L({ children }: { children: string }) {
   return <Text style={{ fontSize: 11, fontWeight: "600" }}>{children}</Text>;
 }
 
+
 export default function TabsLayout() {
-  const inset = useSafeAreaInsets();
-  const { session, isGuest } = useSession();
-  const router = useRouter();
+
+  const { isGuest, session, loading } = useSession();
+  const insets = useSafeAreaInsets();
+  const { colors, dark } = useTheme();
+  const bg = colors.card; // follows navigator theme
+  const hairline = colors.border ?? (dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)");
+  const active = colors.text;
+  const inactive = dark ? "rgba(148,163,184,1)" : "rgba(107,114,128,1)";
 
   // Disable Android hardware back while inside tabs (prevents going back to auth)
   useEffect(() => {
@@ -25,92 +33,62 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
+        tabBarShowLabel: false,
+        tabBarActiveTintColor: active,
+        tabBarInactiveTintColor: inactive,
         tabBarStyle: {
-          height: 60 + inset.bottom,
-          paddingBottom: inset.bottom ? inset.bottom - 4 : 8,
-          paddingTop: 6,
-          borderTopWidth: 1,
-          borderTopColor: "#e5e7eb",
-          backgroundColor: "#fff",
+          height: Platform.OS === "ios" ? 50 + insets.bottom : 50 + insets.bottom,
+          paddingBottom: Platform.OS === "ios" ? insets.bottom : Math.max(insets.bottom, 8),
+          backgroundColor: bg,
+          borderTopWidth: 0.5,
+          borderTopColor: hairline,
+          elevation: 0,
+          shadowOpacity: 0,
         },
-        tabBarActiveTintColor: "#111827",
-        tabBarInactiveTintColor: "#6b7280",
+        tabBarItemStyle: { paddingVertical: 6 },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: "Home",
-          tabBarIcon: () => <Text style={{ fontSize: 18 }}>🏠</Text>,
-          tabBarLabel: ({ color }) => (
-            <Text style={{ color }}>
-              <L>Home</L>
-            </Text>
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon name="home" focused={focused} />,
         }}
       />
-
       <Tabs.Screen
         name="maps"
         options={{
           title: "Map",
-          tabBarIcon: () => <Text style={{ fontSize: 18 }}>🗺️</Text>,
-          tabBarLabel: ({ color }) => (
-            <Text style={{ color }}>
-              <L>Map</L>
-            </Text>
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon name="map" focused={focused} />,
         }}
       />
-
       <Tabs.Screen
         name="post"
-        // Optional: intercept tab press. We still navigate to (tabs)/post,
-        // which renders only the gate modal for guests (no form flicker).
+        options={{ title: "Post",
+          tabBarIcon: ({ focused }) => <TabIcon name="post" focused={focused} />,
+         }}
         listeners={{
           tabPress: (e) => {
-            if (isGuest || !session) {
-              // If you prefer to stay on the current tab and open auth directly:
-              // e.preventDefault();
-              // router.replace("/(auth)/signup");
-              // Otherwise do nothing; navigating to (tabs)/post shows the modal-only screen.
+            if (!loading && (isGuest || !session)) {
+              e.preventDefault();
+              // Send guests to a lightweight gate screen; Post screen never mounts
+              router.push("/gate");
             }
           },
         }}
-        options={{
-          title: "Post",
-          tabBarIcon: () => <Text style={{ fontSize: 18 }}>➕</Text>,
-          tabBarLabel: ({ color }) => (
-            <Text style={{ color }}>
-              <L>Post</L>
-            </Text>
-          ),
-        }}
       />
-
       <Tabs.Screen
         name="profile"
         options={{
           title: "Profile",
-          tabBarIcon: () => <Text style={{ fontSize: 18 }}>👤</Text>,
-          tabBarLabel: ({ color }) => (
-            <Text style={{ color }}>
-              <L>Profile</L>
-            </Text>
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon name="profile" focused={focused} />,
         }}
       />
-
       <Tabs.Screen
         name="settings"
         options={{
           title: "Settings",
-          tabBarIcon: () => <Text style={{ fontSize: 18 }}>⚙️</Text>,
-          tabBarLabel: ({ color }) => (
-            <Text style={{ color }}>
-              <L>Settings</L>
-            </Text>
-          ),
+          tabBarIcon: ({ focused }) => <TabIcon name="settings" focused={focused} />,
         }}
       />
     </Tabs>

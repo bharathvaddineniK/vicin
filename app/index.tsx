@@ -12,11 +12,11 @@ export default function Gate() {
 
     (async () => {
       const { data } = await supabase.auth.getSession();
-      console.log("[Gate] initial session?", !!data.session);
+      // console.log("[Gate] initial session?", !!data.session);
       if (mounted) setAuthed(!!data.session);
 
       const { data: sub } = supabase.auth.onAuthStateChange((evt, session) => {
-        console.log("[Gate] onAuthStateChange:", evt, "session?", !!session);
+        // console.log("[Gate] onAuthStateChange:", evt, "session?", !!session);
         if (mounted) setAuthed(!!session);
       });
 

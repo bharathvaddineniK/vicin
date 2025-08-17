@@ -7,7 +7,7 @@ import { signInWithApple, signInWithGoogle } from "@/lib/oauth";
 import { useSession } from "@/lib/session";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   Alert,
   BackHandler,
@@ -26,6 +26,8 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const key = showPw ? "login-show" : "login-hide";
   const [busy, setBusy] = useState<null | "google" | "apple">(null);
+  const continuingRef = useRef(false);
+  const [continuing, setContinuing] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -85,9 +87,19 @@ export default function Login() {
   }
 
   async function onContinueAsGuest() {
-    await startGuest();
-    setIsGuest(true);
-    router.replace("/(tabs)");
+    if (continuingRef.current) return;
+    continuingRef.current = true;
+    setContinuing(true);
+
+    try {
+      await startGuest();
+      setIsGuest(true);
+      router.replace("/(tabs)");             
+    } catch (e) {
+      continuingRef.current = false;
+      setContinuing(false);
+      Alert.alert("Oops", "Try again.");
+    }
   }
 
   return (

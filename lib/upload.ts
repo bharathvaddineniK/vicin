@@ -50,13 +50,13 @@ export async function uploadImageFromUri(
     .upload(path, ab, { upsert: true, contentType });
 
   if (error) {
-    console.log("[Upload] error", error);
+    // console.log("[Upload] error", error);
     throw error;
   }
 
   // 5) Public URL
   const { data } = supabase.storage.from("images").getPublicUrl(path);
   const publicUrl = data?.publicUrl ?? null;
-  console.log("[Upload] success →", publicUrl);
+  // console.log("[Upload] success →", publicUrl);
   return publicUrl;
 }
