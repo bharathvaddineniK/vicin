@@ -1,181 +1,173 @@
 // hooks/useGeocodeSearch.ts
-// Production-grade forward geocode hook with debounce, cancellation and guards.
-// Calls your deployed Edge Function: /functions/v1/geocode?q=...&lat=...&lng=...&limit=...
-// Requires EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in your env.
+import { supabase } from "@/lib/supabase";
+import { useCallback, useMemo, useRef, useState } from "react";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Platform } from "react-native";
-
-// Minimal result shape mirrored from the Edge Function
 export type GeocodeResult = {
-  id: string | null;
+  id?: string | null;
   label: string;
-  subtitle: string;
-  coords: { lat: number; lng: number } | null;
-  source: "geoapify";
+  subtitle?: string;
+  coords?: { lat: number; lng: number } | null;
+  source?: string;
 };
 
-type UseGeocodeOpts = {
-  debounceMs?: number;    // default 300
-  limit?: number;         // default 5
-  // Optional bias near viewer
+type State = "idle" | "loading" | "success" | "error";
+
+export default function useGeocodeSearch(opts?: {
+  minChars?: number;
+  limit?: number;
   bias?: { lat: number; lng: number } | null;
-};
+  debounceMs?: number;
+}) {
+  const minChars = opts?.minChars ?? 3;
+  const limit = opts?.limit ?? 6;
+  const bias = opts?.bias ?? null;
+  const debounceMs = opts?.debounceMs ?? 250;
 
-type State = {
-  results: GeocodeResult[];
-  loading: boolean;
-  error: string | null;
-  query: string;
-};
+  const [query, setQuery] = useState<string>("");
+  const [results, setResults] = useState<GeocodeResult[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<State>("idle");
+  const [sessionToken, setSessionToken] = useState<string | null>(null); // Google session
 
-const SUPABASE_URL =
-  process.env.EXPO_PUBLIC_SUPABASE_URL?.replace(/\/+$/, "") || "";
-const SUPABASE_ANON =
-  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
-
-/**
- * useGeocodeSearch
- * Debounced, cancelable geocode search against Supabase Edge Function.
- *
- * NOTE: The anon key is public; we only hit our own function domain.
- * Guards:
- *  - no request if query < 3 chars
- *  - clamps limit to [1..10]
- *  - aborts in-flight request on new keystroke/unmount
- */
-export function useGeocodeSearch(opts: UseGeocodeOpts = {}) {
-  const { debounceMs = 300, limit = 5, bias = null } = opts;
-
-  const [state, setState] = useState<State>({
-    results: [],
-    loading: false,
-    error: null,
-    query: "",
-  });
-
-  // keep refs for debounce/abort
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const mountedRef = useRef(true);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastIssuedRef = useRef<string>("");
 
-  // cleanup on unmount
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      if (abortRef.current) abortRef.current.abort();
-    };
-  }, []);
+  const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-  const setQuery = useCallback((q: string) => {
-    setState((s) => ({ ...s, query: q }));
-  }, []);
-
-  const searchNow = useCallback(async (q: string) => {
-    if (!SUPABASE_URL || !SUPABASE_ANON) {
-      setState((s) => ({
-        ...s,
-        loading: false,
-        error: "Missing Supabase env (URL or anon key).",
-      }));
-      return;
-    }
-
-    // guard: require min 3 chars
-    if (!q || q.trim().length < 3) {
-      if (!mountedRef.current) return;
-      setState((s) => ({ ...s, results: [], loading: false, error: null }));
-      return;
-    }
-
-    // clamp limit
-    const lim = Math.min(10, Math.max(1, Math.floor(limit)));
-
-    // abort previous
+  const clear = useCallback(() => {
     if (abortRef.current) abortRef.current.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setResults([]);
+    setError(null);
+    setLoading(false);
+    setStatus("idle");
+  }, []);
 
-    const params = new URLSearchParams();
-    params.set("q", q.trim());
-    params.set("limit", String(lim));
-    if (bias && Number.isFinite(bias.lat) && Number.isFinite(bias.lng)) {
-      // Edge Function already accepts lat/lng to bias results
-      params.set("lat", String(bias.lat));
-      params.set("lng", String(bias.lng));
-    }
+  const buildBaseUrl = useCallback(() => {
+    if (!supabaseUrl) throw new Error("Missing EXPO_PUBLIC_SUPABASE_URL");
+    return `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/geocode`;
+  }, [supabaseUrl]);
 
-    const url = `${SUPABASE_URL}/functions/v1/geocode?${params.toString()}`;
+  const getAuthHeader = useCallback(async (): Promise<string> => {
+    const { data } = await supabase.auth.getSession();
+    const jwt = data?.session?.access_token;
+    if (jwt) return `Bearer ${jwt}`;
+    if (anonKey) return `Bearer ${anonKey}`;
+    throw new Error("Missing auth: no session and EXPO_PUBLIC_SUPABASE_ANON_KEY not set");
+  }, [anonKey]);
 
-    try {
-      if (!mountedRef.current) return;
-      setState((s) => ({ ...s, loading: true, error: null }));
+  const doFetch = useCallback(
+    async (q: string) => {
+      if (abortRef.current) abortRef.current.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
 
-      const res = await fetch(url, {
-        method: "GET",
-        headers: {
-          // anon key is required by Edge Functions
-          Authorization: `Bearer ${SUPABASE_ANON}`,
-          "X-Client-Platform": Platform.OS,
-        },
-        signal: controller.signal,
-      });
+      setLoading(true);
+      setStatus("loading");
+      setError(null);
 
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(
-          `Geocode failed (${res.status})${text ? `: ${text}` : ""}`,
-        );
+      try {
+        const base = buildBaseUrl();
+        const url = new URL(base);
+        url.searchParams.set("q", q);
+        url.searchParams.set("limit", String(limit));
+        if (bias?.lat != null && bias?.lng != null) {
+          url.searchParams.set("lat", String(bias.lat));
+          url.searchParams.set("lng", String(bias.lng));
+        }
+        if (sessionToken) url.searchParams.set("session", sessionToken);
+
+        const auth = await getAuthHeader();
+        lastIssuedRef.current = q;
+
+        const res = await fetch(url.toString(), {
+          method: "GET",
+          headers: { Authorization: auth, Accept: "application/json" },
+          signal: ac.signal,
+        });
+        if (!res.ok) throw new Error((await res.text().catch(() => "")) || `HTTP ${res.status}`);
+
+        const json = (await res.json()) as {
+          query: string;
+          results: GeocodeResult[];
+          count?: number;
+          session?: string;
+        };
+
+        // server can echo back a session id; keep first generated if we don't have one yet
+        if (!sessionToken && json.session) setSessionToken(json.session);
+
+        if (lastIssuedRef.current !== q) return; // stale
+        setResults(Array.isArray(json.results) ? json.results : []);
+        setStatus("success");
+        setLoading(false);
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+        setError(e?.message ?? "Search failed");
+        setResults([]);
+        setStatus("error");
+        setLoading(false);
       }
+    },
+    [bias?.lat, bias?.lng, buildBaseUrl, getAuthHeader, limit, sessionToken]
+  );
 
-      const json = await res.json();
-      const results: GeocodeResult[] = Array.isArray(json?.results)
-        ? json.results
-        : [];
-
-      if (!mountedRef.current) return;
-      setState((s) => ({ ...s, results, loading: false, error: null }));
-    } catch (e: any) {
-      if (e?.name === "AbortError") return; // request was cancelled; no state change
-      if (!mountedRef.current) return;
-      setState((s) => ({
-        ...s,
-        loading: false,
-        error: e?.message || "Unknown geocode error",
-      }));
-    }
-  }, [limit]);
-
-  // debounced search when query changes
-  useEffect(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    const q = state.query;
-
-    timerRef.current = setTimeout(() => {
-      searchNow(q);
-    }, debounceMs);
-
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.query, debounceMs, searchNow]);
-
-  // manual imperative trigger (e.g., on submit)
   const search = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    return searchNow(state.query);
-  }, [searchNow, state.query]);
+    const q = query.trim();
+    if (debounceRef.current) clearTimeout(debounceRef.current);
 
-  return {
-    results: state.results,
-    loading: state.loading,
-    error: state.error,
-    query: state.query,
-    setQuery,
-    search,       // optional manual trigger
-  };
+    if (q.length < minChars) {
+      if (abortRef.current) abortRef.current.abort();
+      setResults([]);
+      setStatus("idle");
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    debounceRef.current = setTimeout(() => doFetch(q), debounceMs);
+  }, [debounceMs, doFetch, minChars, query]);
+
+  // Fetch details for a selected Google prediction (coords)
+  const resolvePlace = useCallback(
+    async (id: string) => {
+      const base = buildBaseUrl();
+      const url = new URL(base);
+      url.searchParams.set("id", id);
+      if (sessionToken) url.searchParams.set("session", sessionToken);
+
+      const auth = await getAuthHeader();
+      const res = await fetch(url.toString(), {
+        method: "GET",
+        headers: { Authorization: auth, Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error((await res.text().catch(() => "")) || `HTTP ${res.status}`);
+
+      const json = (await res.json()) as { results: GeocodeResult[] };
+      return (json.results?.[0] ?? null) as GeocodeResult | null;
+    },
+    [buildBaseUrl, getAuthHeader, sessionToken]
+  );
+
+  return useMemo(
+    () => ({
+      // state
+      query,
+      setQuery,
+      results,
+      loading,
+      error,
+      status,
+
+      // actions
+      search,         // debounce-driven autocomplete
+      clear,          // reset internal state
+      resolvePlace,   // fetch coords for a selected prediction
+      sessionToken,
+      setSessionToken,
+    }),
+    [clear, error, loading, query, resolvePlace, results, search, sessionToken, setSessionToken, status, setQuery]
+  );
 }
-
-export default useGeocodeSearch;
