@@ -1,29 +1,24 @@
 import HashtagField from "@/components/HashtagRow";
 import LocationPicker, { Coords, LocationMode } from "@/components/LocationPicker";
+import MediaUploader, { MediaItem } from "@/components/MediaUploader";
 import Screen from "@/components/Screen";
 import { PerfMarker, useFps, useRenderCounter } from "@/hooks/perf";
 import { getOneShot } from "@/lib/location";
-import { uploadPostAssetWithProgress } from "@/lib/media";
 import { useSession } from "@/lib/session";
 import { supabase } from "@/lib/supabase";
 import { useIsFocused } from "@react-navigation/native";
-import { ResizeMode, Video } from "expo-av";
-import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
-import { nanoid } from "nanoid/non-secure";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   Alert,
-  Animated,
-  Easing,
-  Image,
+  KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   Switch,
   Text,
   TextInput,
-  View,
+  View
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -58,52 +53,7 @@ const MAX_CONTENT_LENGTH = 250;
 /* ---------- Types ---------- */
 type PostType = (typeof TYPES)[number]["key"];
 
-type UploadingItem = {
-  id: string;
-  kind: "image" | "video";
-  status: "uploading";
-  localUri: string;
-};
-
-type DoneItem = {
-  id: string;
-  kind: "image" | "video";
-  status: "done";
-  url: string;
-};
-
-type MediaItem = UploadingItem | DoneItem;
-
 /* ---------- Components ---------- */
-const Shimmer = React.memo(({ style }: { style: any }) => {
-  const opacity = useRef(new Animated.Value(0.45)).current;
-
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(opacity, {
-          toValue: 1,
-          duration: 700,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacity, {
-          toValue: 0.45,
-          duration: 700,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [opacity]);
-
-  return (
-    <Animated.View style={[{ backgroundColor: "#e5e7eb" }, style, { opacity }]} />
-  );
-});
-
 const GuestModeGate = React.memo(() => (
   <Screen edges={["top"]}>
     <View style={styles.guestContainer}>
@@ -165,25 +115,26 @@ export default function CreatePost() {
   const [expiry, setExpiry] = useState<ExpiryOption>(DEFAULT_EXPIRY);
   const [selectedKey, setSelectedKey] = useState<string>(DEFAULT_EXPIRY.key);
   const [callEnabled, setCallEnabled] = useState(false);
-  const [media, setMedia] = useState<MediaItem[]>([]);
   const [busy, setBusy] = useState(false);
-  const [tags, setTags] = useState<string[]>([])
+  const [tags, setTags] = useState<string[]>([]);
+
+  // Media state - managed by MediaUploader
+  const [hasInFlight, setHasInFlight] = useState(false);
+  const [readyMedia, setReadyMedia] = useState<MediaItem[]>([]);
+  const [mediaResetTrigger, setMediaResetTrigger] = useState(0);
 
   // Custom expiry state
   const [showCustom, setShowCustom] = useState(false);
   const [customDays, setCustomDays] = useState("");
 
-  // Computed values
-  const imgCount = useMemo(() => media.filter(m => m.kind === "image").length, [media]);
-  const hasVideo = useMemo(() => media.some(m => m.kind === "video"), [media]);
-  const hasInFlight = useMemo(() => media.some(m => m.status === "uploading"), [media]);
-  const remaining = MAX_CONTENT_LENGTH - content.length;
-  const canPost = !busy && !hasInFlight && content.trim().length >= 1 && content.trim().length <= MAX_CONTENT_LENGTH;
-
-
+  // Location state
   const [locationMode, setLocationMode] = useState<LocationMode>("subject");
   const [venueLabel, setVenueLabel] = useState<string>("");
   const [venueCoords, setVenueCoords] = useState<Coords>(null);
+
+  // Computed values
+  const remaining = MAX_CONTENT_LENGTH - content.length;
+  const canPost = !busy && !hasInFlight && content.trim().length >= 1 && content.trim().length <= MAX_CONTENT_LENGTH;
 
   // Helper functions
   const getCoarseType = useCallback((type: PostType): "update" | "event" | "question" | "help" => {
@@ -197,127 +148,29 @@ export default function CreatePost() {
 
   const resetForm = useCallback(() => {
     setContent("");
-    setMedia([]);
     setPostType("update");
     setCallEnabled(false);
     setExpiry(DEFAULT_EXPIRY);
     setSelectedKey(DEFAULT_EXPIRY.key);
     setCustomDays("");
     setShowCustom(false);
+    setTags([]);
+    // Reset media by incrementing the trigger
+    setMediaResetTrigger(prev => prev + 1);
   }, []);
 
   // Media handlers
-  const addImages = useCallback(async () => {
-    if (imgCount >= 5) {
-      return Alert.alert("Limit reached", "You can add up to 5 images.");
-    }
+  const handleMediaStateChange = useCallback((inFlight: boolean) => {
+    setHasInFlight(inFlight);
+  }, []);
 
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (perm.status !== "granted") return;
+  const handleMediaReady = useCallback((items: MediaItem[]) => {
+    setReadyMedia(items);
+  }, []);
 
-    const remainingSlots = 5 - imgCount;
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsMultipleSelection: true,
-      quality: 0.9,
-      selectionLimit: remainingSlots,
-    });
-
-    if (res.canceled) return;
-
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      return Alert.alert("Sign in required", "Guests can't upload.");
-    }
-
-    const placeholders: UploadingItem[] = res.assets
-      .slice(0, remainingSlots)
-      .map(a => ({
-        id: nanoid(),
-        kind: "image",
-        status: "uploading",
-        localUri: a.uri,
-      }));
-
-    setMedia(prev => [...prev, ...placeholders]);
-
-    // Upload images
-    for (const ph of placeholders) {
-      try {
-        const result = await uploadPostAssetWithProgress(
-          session.user.id,
-          ph.localUri,
-          Date.now(),
-          () => { }
-        );
-
-        setMedia(prev =>
-          prev.map(m =>
-            m.id === ph.id
-              ? { id: ph.id, kind: "image", status: "done", url: result.url }
-              : m
-          )
-        );
-      } catch (error) {
-        setMedia(prev => prev.filter(m => m.id !== ph.id));
-        Alert.alert("Upload failed", "One image could not be uploaded.");
-      }
-    }
-  }, [imgCount]);
-
-  const addVideo = useCallback(async () => {
-    if (hasVideo) {
-      return Alert.alert("Limit", "Only one video is allowed.");
-    }
-
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (perm.status !== "granted") return;
-
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-      allowsMultipleSelection: false,
-      quality: ImagePicker.UIImagePickerControllerQualityType.Medium,
-    });
-
-    if (res.canceled) return;
-
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      return Alert.alert("Sign in required", "Guests can't upload.");
-    }
-
-    const placeholder: UploadingItem = {
-      id: nanoid(),
-      kind: "video",
-      status: "uploading",
-      localUri: res.assets[0].uri,
-    };
-
-    setMedia(prev => [...prev, placeholder]);
-
-    try {
-      const result = await uploadPostAssetWithProgress(
-        session.user.id,
-        placeholder.localUri,
-        Date.now(),
-        () => { }
-      );
-
-      setMedia(prev =>
-        prev.map(m =>
-          m.id === placeholder.id
-            ? { id: placeholder.id, kind: "video", status: "done", url: result.url }
-            : m
-        )
-      );
-    } catch (error) {
-      setMedia(prev => prev.filter(m => m.id !== placeholder.id));
-      Alert.alert("Upload failed", "The video could not be uploaded.");
-    }
-  }, [hasVideo]);
-
-  const removeMedia = useCallback((id: string) => {
-    setMedia(prev => prev.filter(m => m.id !== id));
+  const handleMediaError = useCallback((error: string) => {
+    console.error('Media upload error:', error);
+    // Error is already shown by MediaUploader component
   }, []);
 
   // Submit handler
@@ -348,8 +201,8 @@ export default function CreatePost() {
         _expires_at: expires_at,
         _lat: latitude,
         _lng: longitude,
-        _tags: tags, // text[] - e.g., ["weekend","meetup"]
-        _location_source: locationMode,                  // 'subject' | 'venue'
+        _tags: tags,
+        _location_source: locationMode,
         _venue_label: venueLabel?.trim() || null,
         _venue_lat: venueCoords?.lat ?? null,
         _venue_lng: venueCoords?.lng ?? null,
@@ -358,12 +211,11 @@ export default function CreatePost() {
       if (rpcErr) throw rpcErr;
 
       // Attach media
-      const doneMedia = media.filter(m => m.status === "done") as DoneItem[];
-      if (doneMedia.length) {
-        const rows = doneMedia.map(m => ({
+      if (readyMedia.length > 0) {
+        const rows = readyMedia.map(m => ({
           post_id: newId as string,
           kind: m.kind,
-          url: m.url,
+          url: m.url!,
         }));
 
         const { error: mErr } = await supabase.from("post_media").insert(rows);
@@ -385,7 +237,7 @@ export default function CreatePost() {
     } finally {
       setBusy(false);
     }
-  }, [canPost, content, postType, expiry, callEnabled, media, getCoarseType, resetForm]);
+  }, [canPost, content, postType, expiry, callEnabled, tags, locationMode, venueLabel, venueCoords, readyMedia, getCoarseType, resetForm]);
 
   // Custom expiry handler
   const handleCustomExpiry = useCallback(() => {
@@ -405,10 +257,6 @@ export default function CreatePost() {
     setShowCustom(false);
   }, [customDays, postType]);
 
-  // Render helpers
-  const imageItems = useMemo(() => media.filter(m => m.kind === "image"), [media]);
-  const videoItem = useMemo(() => media.find(m => m.kind === "video"), [media]);
-
   if (loading) {
     return <SafeAreaView style={styles.loadingContainer} />;
   }
@@ -419,7 +267,11 @@ export default function CreatePost() {
 
   const Content = (
     <Screen edges={["top"]}>
-      <View style={styles.container}>
+      <KeyboardAvoidingView 
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <Text style={{ fontSize: 22, fontWeight: "800" }}>New post</Text>
@@ -481,193 +333,146 @@ export default function CreatePost() {
 
           <HashtagField tags={tags} onChangeTags={setTags} />
 
-
-          {/* Media Pickers */}
-          <View style={styles.pickerContainer}>
-            <Pressable
-              onPress={addImages}
-              disabled={imgCount >= 5}
-              style={({ pressed }) => [
-                styles.pickerButton,
-                { opacity: pressed || imgCount >= 5 ? 0.6 : 1 }
-              ]}
-            >
-              <Text style={styles.pickerButtonText}>
-                Add images ({imgCount}/5)
-              </Text>
-            </Pressable>
-
-            <Pressable
-              onPress={addVideo}
-              disabled={hasVideo}
-              style={({ pressed }) => [
-                styles.pickerButton,
-                { opacity: pressed || hasVideo ? 0.6 : 1 }
-              ]}
-            >
-              <Text style={styles.pickerButtonText}>
-                {hasVideo ? "Video added" : "Add video (1)"}
-              </Text>
-            </Pressable>
-          </View>
-
-          {/* Images Display */}
-          {imageItems.length > 0 && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.mediaScroll}
-            >
-              {imageItems.map(item =>
-                item.status === "uploading" ? (
-                  <Shimmer key={item.id} style={styles.mediaPlaceholder} />
-                ) : (
-                  <View key={item.id} style={styles.mediaItem}>
-                    <Image
-                      source={{ uri: (item as DoneItem).url }}
-                      style={styles.mediaImage}
-                    />
-                    <Pressable
-                      onPress={() => removeMedia(item.id)}
-                      hitSlop={10}
-                      style={({ pressed }) => [
-                        styles.removeButton,
-                        { backgroundColor: pressed ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.35)" }
-                      ]}
-                    >
-                      <Text style={styles.removeButtonText}>×</Text>
-                    </Pressable>
-                  </View>
-                )
-              )}
-            </ScrollView>
-          )}
-
-          {/* Video Display */}
-          {videoItem && (
-            <View style={styles.videoContainer}>
-              <Text style={styles.videoLabel}>Video</Text>
-              {videoItem.status === "uploading" ? (
-                <Shimmer style={styles.videoPlaceholder} />
-              ) : (
-                isFocused ? (
-                  <Video
-                    source={{ uri: (videoItem as DoneItem).url }}
-                    useNativeControls
-                    resizeMode={ResizeMode.COVER}
-                    style={styles.video}
-                  />
-                ) : (
-                  <View style={styles.videoPaused}>
-                    <Text style={styles.videoPausedText}>Video paused</Text>
-                  </View>
-                )
-              )}
-              <Pressable onPress={() => removeMedia(videoItem.id)}>
-                <Text style={styles.removeVideoText}>Remove video</Text>
-              </Pressable>
-            </View>
+          {/* Media Uploader Component */}
+          {session && (
+            <MediaUploader
+              userId={session.user.id}
+              maxImages={5}
+              maxVideos={1}
+              onMediaStateChange={handleMediaStateChange}
+              onMediaReady={handleMediaReady}
+              onError={handleMediaError}
+              disabled={busy}
+              resetTrigger={mediaResetTrigger}
+            />
           )}
 
           {/* Visibility Settings */}
           <View style={styles.settingsContainer}>
             <Text style={styles.settingsTitle}>Visibility</Text>
 
-            <View style={styles.chipContainer}>
-              {EXPIRY_OPTIONS.map(e => (
+            {/* Expiry Options Pills with Scroll Indicator */}
+            <View style={styles.expiryContainer}>
+              <ScrollView 
+                horizontal 
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.expiryScrollContainer}
+              >
+                {EXPIRY_OPTIONS.map(e => (
+                  <Pressable
+                    key={e.key}
+                    onPress={() => {
+                      setSelectedKey(e.key);
+                      setShowCustom(false);
+                      setExpiry(e);
+                    }}
+                    style={({ pressed }) => [
+                      styles.expiryPill,
+                      selectedKey === e.key && styles.expiryPillActive,
+                      { opacity: pressed ? 0.8 : 1 }
+                    ]}
+                  >
+                    <Text style={[
+                      styles.expiryPillText,
+                      selectedKey === e.key && styles.expiryPillTextActive
+                    ]}>
+                      {e.label}
+                    </Text>
+                  </Pressable>
+                ))}
+
                 <Pressable
-                  key={e.key}
                   onPress={() => {
-                    setSelectedKey(e.key);
-                    setShowCustom(false);
-                    setExpiry(e);
+                    setSelectedKey("custom");
+                    setShowCustom(true);
                   }}
                   style={({ pressed }) => [
-                    styles.chip,
-                    selectedKey === e.key && styles.chipActive,
-                    { opacity: pressed ? 0.7 : 1 }
+                    styles.expiryPill,
+                    selectedKey === "custom" && styles.expiryPillActive,
+                    { opacity: pressed ? 0.8 : 1 }
                   ]}
                 >
                   <Text style={[
-                    styles.chipText,
-                    selectedKey === e.key && styles.chipTextActive
+                    styles.expiryPillText,
+                    selectedKey === "custom" && styles.expiryPillTextActive
                   ]}>
-                    {e.label}
+                    Custom
                   </Text>
                 </Pressable>
-              ))}
-
-              <Pressable
-                onPress={() => {
-                  setSelectedKey("custom");
-                  setShowCustom(true);
-                }}
-                style={({ pressed }) => [
-                  styles.chip,
-                  selectedKey === "custom" && styles.chipActive,
-                  { opacity: pressed ? 0.7 : 1 }
-                ]}
-              >
-                <Text style={[
-                  styles.chipText,
-                  selectedKey === "custom" && styles.chipTextActive
-                ]}>
-                  Custom…
-                </Text>
-              </Pressable>
+              </ScrollView>
+              
+              {/* Scroll Indicator */}
+              <View style={styles.scrollIndicator}>
+                <Text style={styles.scrollHint}>← Swipe for more options</Text>
+              </View>
             </View>
 
-            <Text style={styles.settingsHint}>
-              {postType === "event" ? "Custom max: 90 days" : "Custom max: 30 days"}
-            </Text>
-
-            {/* Custom Expiry Panel */}
+            {/* Custom Expiry Panel with Keyboard Handling */}
             {showCustom && (
               <View style={styles.customPanel}>
-                <Text style={styles.customTitle}>Custom expiry</Text>
-                <TextInput
-                  placeholder="Days (e.g. 7)"
-                  keyboardType="numeric"
-                  value={customDays}
-                  onChangeText={setCustomDays}
-                  style={styles.customInput}
-                />
-                <View style={styles.customButtons}>
-                  <Pressable
-                    onPress={handleCustomExpiry}
-                    style={({ pressed }) => [
-                      styles.customSetButton,
-                      { opacity: pressed ? 0.7 : 1 }
-                    ]}
-                  >
-                    <Text style={styles.customSetButtonText}>Set</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => setShowCustom(false)}
-                    style={({ pressed }) => [
-                      styles.customCancelButton,
-                      { opacity: pressed ? 0.7 : 1 }
-                    ]}
-                  >
-                    <Text style={styles.customCancelButtonText}>Cancel</Text>
-                  </Pressable>
+                <View style={styles.customHeader}>
+                  <Text style={styles.customTitle}>Custom Duration</Text>
+                  <Text style={styles.customSubtitle}>
+                    {postType === "event" ? "Maximum 90 days" : "Maximum 30 days"}
+                  </Text>
+                </View>
+                <View style={styles.customInputContainer}>
+                  <TextInput
+                    placeholder="Enter days"
+                    keyboardType="numeric"
+                    value={customDays}
+                    onChangeText={setCustomDays}
+                    style={styles.customInput}
+                    autoFocus={true}
+                    returnKeyType="done"
+                    onSubmitEditing={handleCustomExpiry}
+                  />
+                  <View style={styles.customActions}>
+                    <Pressable
+                      onPress={() => setShowCustom(false)}
+                      style={({ pressed }) => [
+                        styles.customCancelButton,
+                        { opacity: pressed ? 0.7 : 1 }
+                      ]}
+                    >
+                      <Text style={styles.customCancelButtonText}>Cancel</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleCustomExpiry}
+                      style={({ pressed }) => [
+                        styles.customSetButton,
+                        { opacity: pressed ? 0.7 : 1 }
+                      ]}
+                    >
+                      <Text style={styles.customSetButtonText}>Apply</Text>
+                    </Pressable>
+                  </View>
                 </View>
               </View>
             )}
 
-            {/* Selected Badge */}
-            <View style={styles.badgeContainer}>
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>
-                  {expiry.key === "none" ? "No expiry" : `Expires in ${expiry.label}`}
-                </Text>
+            {/* Current Selection Display */}
+            <View style={styles.currentSelection}>
+              <View style={styles.selectionIcon}>
+                <Text style={styles.selectionIconText}>⏱</Text>
               </View>
+              <Text style={styles.selectionText}>
+                {expiry.key === "none" ? "Never expires" : `Expires in ${expiry.label}`}
+              </Text>
             </View>
 
             {/* Call Toggle */}
             <View style={styles.toggleContainer}>
-              <Text style={styles.toggleLabel}>Enable call</Text>
-              <Switch value={callEnabled} onValueChange={setCallEnabled} />
+              <View style={styles.toggleInfo}>
+                <Text style={styles.toggleLabel}>Enable voice calls</Text>
+                <Text style={styles.toggleDescription}>Allow others to call you about this post</Text>
+              </View>
+              <Switch 
+                value={callEnabled} 
+                onValueChange={setCallEnabled}
+                trackColor={{ false: '#e5e7eb', true: '#3b82f6' }}
+                thumbColor={callEnabled ? '#ffffff' : '#f3f4f6'}
+              />
             </View>
           </View>
 
@@ -685,7 +490,7 @@ export default function CreatePost() {
             </Text>
           </Pressable>
         </ScrollView>
-      </View>
+      </KeyboardAvoidingView>
     </Screen>
   );
 
@@ -762,123 +567,184 @@ const styles = {
   characterCountError: { color: "#ef4444" },
   inputHint: { color: "#94a3b8" },
 
-  // Pickers
-  pickerContainer: { flexDirection: "row" as const, gap: 8 },
-  pickerButton: {
-    borderWidth: 1,
-    borderColor: "#93c5fd",
-    backgroundColor: "#fff",
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-  },
-  pickerButtonText: { fontWeight: "700" as const },
-
-  // Media
-  mediaScroll: { gap: 8 },
-  mediaPlaceholder: { width: 96, height: 96, borderRadius: 12 },
-  mediaItem: { position: "relative" as const },
-  mediaImage: {
-    width: 96,
-    height: 96,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-  },
-  removeButton: {
-    position: "absolute" as const,
-    top: 4,
-    right: 4,
-    width: 24,
-    height: 24,
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-    borderRadius: 12,
-  },
-  removeButtonText: { color: "#fff", fontWeight: "800" as const },
-
-  // Video
-  videoContainer: {
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 10,
-    gap: 8,
-  },
-  videoLabel: { fontWeight: "700" as const },
-  videoPlaceholder: { width: "100%" as const, height: 180, borderRadius: 10 },
-  video: { width: "100%" as const, height: 180, borderRadius: 10 },
-  videoPaused: {
-    width: "100%" as const,
-    height: 180,
-    borderRadius: 10,
-    backgroundColor: "#f1f5f9",
-    justifyContent: "center" as const,
-    alignItems: "center" as const,
-  },
-  videoPausedText: { color: "#64748b" },
-  removeVideoText: { color: "#ef4444", fontWeight: "700" as const },
-
   // Settings
   settingsContainer: {
     backgroundColor: "#fff",
     borderRadius: 14,
-    padding: 12,
+    padding: 16,
     borderWidth: 1,
     borderColor: "#e5e7eb",
-    gap: 12,
+    gap: 16,
   },
-  settingsTitle: { fontWeight: "800" as const },
-  settingsHint: { color: "#94a3b8", marginTop: 4 },
+  settingsTitle: { 
+    fontWeight: "800" as const, 
+    fontSize: 16,
+    color: "#111827",
+    marginBottom: 4,
+  },
 
-  // Custom expiry
+  // Modern Expiry Pills with Scroll Indicator
+  expiryContainer: {
+    position: "relative" as const,
+  },
+  expiryScrollContainer: {
+    flexDirection: "row" as const,
+    gap: 10,
+    paddingHorizontal: 2,
+  },
+  expiryPill: {
+    backgroundColor: "#f8fafc",
+    borderWidth: 1.5,
+    borderColor: "#e2e8f0",
+    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  expiryPillActive: {
+    backgroundColor: "#2563eb",
+    borderColor: "#2563eb",
+    shadowColor: "#2563eb",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  expiryPillText: {
+    fontSize: 14,
+    fontWeight: "600" as const,
+    color: "#64748b",
+    textAlign: "center" as const,
+  },
+  expiryPillTextActive: {
+    color: "#ffffff",
+    fontWeight: "700" as const,
+  },
+  scrollIndicator: {
+    alignItems: "center" as const,
+    marginTop: 8,
+  },
+  scrollHint: {
+    fontSize: 12,
+    color: "#9ca3af",
+    fontStyle: "italic" as const,
+  },
+
+  // Enhanced Custom Panel
   customPanel: {
-    backgroundColor: "#fff",
+    backgroundColor: "#f8fafc",
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
-    padding: 12,
-  },
-  customTitle: { fontWeight: "800" as const, marginBottom: 6 },
-  customInput: {
-    backgroundColor: "#f8fafc",
-    borderWidth: 1,
     borderColor: "#e2e8f0",
-    borderRadius: 10,
-    padding: 10,
+    padding: 16,
+    marginTop: 8,
   },
-  customButtons: { flexDirection: "row" as const, gap: 8, marginTop: 10 },
+  customHeader: {
+    marginBottom: 12,
+  },
+  customTitle: { 
+    fontWeight: "700" as const, 
+    fontSize: 15,
+    color: "#111827",
+    marginBottom: 2,
+  },
+  customSubtitle: {
+    fontSize: 13,
+    color: "#6b7280",
+  },
+  customInputContainer: {
+    gap: 12,
+  },
+  customInput: {
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#d1d5db",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    fontSize: 15,
+  },
+  customActions: { 
+    flexDirection: "row" as const, 
+    gap: 10,
+    justifyContent: "flex-end" as const,
+  },
   customSetButton: {
     backgroundColor: "#2563eb",
     paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  customSetButtonText: { 
+    color: "#fff", 
+    fontWeight: "600" as const,
+    fontSize: 14,
+  },
+  customCancelButton: { 
+    paddingVertical: 10, 
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  customCancelButtonText: { 
+    fontWeight: "600" as const,
+    color: "#6b7280",
+    fontSize: 14,
+  },
+
+  // Current Selection Display
+  currentSelection: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    backgroundColor: "#f1f5f9",
     borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 10,
   },
-  customSetButtonText: { color: "#fff", fontWeight: "700" as const },
-  customCancelButton: { paddingVertical: 10, paddingHorizontal: 12 },
-  customCancelButtonText: { fontWeight: "700" as const },
-
-  // Badge
-  badgeContainer: { marginTop: 6 },
-  badge: {
-    alignSelf: "flex-start" as const,
-    backgroundColor: "#eef2ff",
-    borderColor: "#c7d2fe",
-    borderWidth: 1,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 999,
+  selectionIcon: {
+    width: 28,
+    height: 28,
+    backgroundColor: "#e0e7ff",
+    borderRadius: 14,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
   },
-  badgeText: { color: "#3730a3", fontWeight: "700" as const },
+  selectionIconText: {
+    fontSize: 14,
+  },
+  selectionText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "600" as const,
+    color: "#374151",
+  },
 
-  // Toggle
+  // Enhanced Toggle
   toggleContainer: {
     flexDirection: "row" as const,
     alignItems: "center" as const,
     justifyContent: "space-between" as const,
+    paddingTop: 4,
   },
-  toggleLabel: {},
+  toggleInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  toggleLabel: {
+    fontSize: 15,
+    fontWeight: "600" as const,
+    color: "#111827",
+    marginBottom: 2,
+  },
+  toggleDescription: {
+    fontSize: 13,
+    color: "#6b7280",
+    lineHeight: 18,
+  },
 
   // Buttons
   primaryButton: {

@@ -51,34 +51,42 @@ async function openProviderUrl(
 
 export async function signInWithGoogle() {
   const redirectTo = getRedirectUri();
+  console.log("[OAuth] Google redirect URI:", redirectTo);
+  
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: {
       redirectTo,
       queryParams: { prompt: "select_account" },
-      // keep skipBrowserRedirect=false (default); we’ll open manually
+      // keep skipBrowserRedirect=false (default); we'll open manually
     },
   });
   if (error) {
-    // console.log("[OAuth] Google error:", error.message);
+    console.log("[OAuth] Google error:", error.message);
     throw error;
   }
   const authUrl = data?.url;
+  console.log("[OAuth] Google auth URL:", authUrl);
+  
   if (authUrl) await openProviderUrl(authUrl, redirectTo);
   else await Linking.openURL(redirectTo); // extreme fallback
 }
 
 export async function signInWithApple() {
   const redirectTo = getRedirectUri();
+  console.log("[OAuth] Apple redirect URI:", redirectTo);
+  
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "apple",
     options: { redirectTo },
   });
   if (error) {
-    // console.log("[OAuth] Apple error:", error.message);
+    console.log("[OAuth] Apple error:", error.message);
     throw error;
   }
   const authUrl = data?.url;
+  console.log("[OAuth] Apple auth URL:", authUrl);
+  
   // For Apple on iOS, ephemeral reduces prompts and is HIG-friendly
   if (authUrl) await openProviderUrl(authUrl, redirectTo, { ephemeral: true });
   else await Linking.openURL(redirectTo);

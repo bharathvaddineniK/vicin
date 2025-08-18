@@ -10,15 +10,39 @@ function isSupabaseReturn(url: string) {
   // very simple check: fragment contains access_token OR type=recovery/signup
   const hasToken = url.includes("#access_token=");
   const hasType = /[?&#]type=(recovery|signup)/.test(url);
-  return hasToken || hasType;
+  const isSupabaseUrl = hasToken || hasType;
+  console.log("[DeepLink] URL:", url);
+  console.log("[DeepLink] Is Supabase return:", isSupabaseUrl, { hasToken, hasType });
+  return isSupabaseUrl;
 }
 
 export default function DeepLinkAgent() {
   useEffect(() => {
     const handleUrl = async (url: string) => {
-      // 1) Supabase OAuth/OTP links → let your existing handler do setSession + route
+      // 1) Supabase OAuth/OTP links → process the session
       if (isSupabaseReturn(url)) {
-        // your existing OAuth/etc consumption code runs elsewhere
+        console.log("[DeepLink] Processing Supabase OAuth callback");
+        try {
+          // For OAuth callbacks, Supabase will automatically handle the session
+          // We just need to trigger a session refresh
+          const { data, error } = await supabase.auth.refreshSession();
+          if (error) {
+            console.error("[DeepLink] OAuth session refresh error:", error);
+            // Try to get the current session instead
+            const { data: sessionData } = await supabase.auth.getSession();
+            if (sessionData.session) {
+              console.log("[DeepLink] OAuth session found via getSession");
+              router.replace("/(tabs)");
+            }
+          } else if (data.session) {
+            console.log("[DeepLink] OAuth session established successfully");
+            router.replace("/(tabs)");
+          } else {
+            console.log("[DeepLink] No session found in OAuth callback");
+          }
+        } catch (error) {
+          console.error("[DeepLink] Error processing OAuth callback:", error);
+        }
         return;
       }
 

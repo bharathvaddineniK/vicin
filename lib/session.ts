@@ -30,15 +30,18 @@ export function useSession() {
     );
 
     const { data: sub } = supabase.auth.onAuthStateChange(
-      async (_event: AuthChangeEvent, s: Session | null) => {
+      async (event: AuthChangeEvent, s: Session | null) => {
+        console.log("[Session] Auth state change:", event, s ? "session exists" : "no session");
         if (!mounted) return;
         const hadNoSession = !session;
         setSession(s);
         if (s) {
+          console.log("[Session] User authenticated:", s.user.email);
           endGuest().catch(() => {});
           setIsGuest(false);
         }
         if (s && hadNoSession) {
+          console.log("[Session] Migrating guest preferences");
           await migrateGuestPrefsToProfile();
         }
       },

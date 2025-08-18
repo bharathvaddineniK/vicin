@@ -46,8 +46,8 @@
     },
     "deeplinks": [
       {
-        "scheme": "vicin",
-        "path": "auth-callback",
+        "scheme": "vicinapp",
+        "path": "oauth-callback",
         "query": {},
         "resetOnTap": true
       }

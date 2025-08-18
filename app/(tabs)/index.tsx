@@ -243,33 +243,106 @@ export default function HomeFeed() {
     let mounted = true;
     
     const setupFeed = async () => {
+      // Check Supabase connection and auth status first
+      try {
+        console.log('Checking Supabase connection...');
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        console.log('Current session:', session ? 'authenticated' : 'not authenticated');
+        if (sessionError) {
+          console.error('Session error:', sessionError);
+        }
+        
+        // Test basic connection with a simple query
+        const { data: testData, error: testError } = await supabase
+          .from('posts')
+          .select('count')
+          .limit(1);
+        
+        if (testError) {
+          console.error('Supabase connection test failed:', testError);
+        } else {
+          console.log('Supabase connection test successful');
+        }
+      } catch (error) {
+        console.error('Error testing Supabase connection:', error);
+      }
+      
       await loadInitialPosts();
       
       if (!mounted) return;
       
-      // Set up real-time subscription with better error handling
-      try {
-        channelRef.current = supabase
-          .channel("posts-feed")
-          .on(
-            "postgres_changes",
-            { event: "INSERT", schema: "public", table: "posts" },
-            (payload) => {
-              if (mounted) {
-                setPosts((p) => [{ ...(payload.new as any), post_media: [] }, ...p]);
-              }
-            },
-          )
-          .subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-              console.log('Feed subscription active');
-            } else if (status === 'CHANNEL_ERROR') {
-              console.error('Feed subscription error');
-            }
-          });
-      } catch (error) {
-        console.error("Error setting up real-time subscription:", error);
+      // Only set up real-time subscription if we have a valid session or are guest
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        console.log('No session found, skipping real-time subscription');
+        return;
       }
+      
+      // Set up real-time subscription with better error handling
+      const setupSubscription = async (retryCount = 0) => {
+        try {
+          console.log(`Setting up subscription (attempt ${retryCount + 1})`);
+          
+          channelRef.current = supabase
+            .channel(`posts-feed-${Date.now()}`) // Unique channel name
+            .on(
+              "postgres_changes",
+              { 
+                event: "INSERT", 
+                schema: "public", 
+                table: "posts",
+                filter: "is_deleted=eq.false" // Only listen for non-deleted posts
+              },
+              (payload) => {
+                console.log('Real-time update received:', payload);
+                if (mounted) {
+                  setPosts((p) => [{ ...(payload.new as any), post_media: [] }, ...p]);
+                }
+              },
+            )
+            .subscribe((status) => {
+              console.log('Feed subscription status:', status);
+              if (status === 'SUBSCRIBED') {
+                console.log('✅ Feed subscription active');
+              } else if (status === 'CHANNEL_ERROR') {
+                console.error('❌ Feed subscription error');
+                // Stop retrying after 2 attempts to avoid infinite loops
+                if (retryCount < 2 && mounted) {
+                  setTimeout(() => {
+                    if (channelRef.current) {
+                      supabase.removeChannel(channelRef.current);
+                      channelRef.current = null;
+                    }
+                    setupSubscription(retryCount + 1);
+                  }, 3000 * (retryCount + 1)); // Longer delays
+                } else {
+                  console.log('Max retries reached, giving up on real-time subscription');
+                }
+              } else if (status === 'CLOSED') {
+                console.log('Feed subscription closed');
+              } else if (status === 'TIMED_OUT') {
+                console.log('Feed subscription timed out');
+                if (retryCount < 2 && mounted) {
+                  setTimeout(() => {
+                    if (channelRef.current) {
+                      supabase.removeChannel(channelRef.current);
+                      channelRef.current = null;
+                    }
+                    setupSubscription(retryCount + 1);
+                  }, 5000);
+                }
+              }
+            });
+        } catch (error) {
+          console.error("Error setting up real-time subscription:", error);
+          // Only retry on error if we haven't exceeded retry limit
+          if (retryCount < 2 && mounted) {
+            setTimeout(() => setupSubscription(retryCount + 1), 3000 * (retryCount + 1));
+          }
+        }
+      };
+      
+      setupSubscription();
     };
     
     setupFeed();
