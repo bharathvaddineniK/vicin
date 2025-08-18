@@ -1,497 +1,637 @@
-// /app/(tabs)/index.tsx
-import Screen from "@/components/Screen";
-import { supabase } from "@/lib/supabase";
-import { useIsFocused } from "@react-navigation/native";
-import { Audio, AVPlaybackStatus, ResizeMode, Video } from "expo-av";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Header from "@/components/Header";
+import { LinearGradient } from "expo-linear-gradient";
+import { router } from "expo-router";
 import {
-  ActivityIndicator,
-  FlatList,
-  Image,
-  Platform,
+  Calendar,
+  Clock,
+  Fire,
+  HandHeart,
+  Info,
+  MapPin,
+  Question,
+  Star,
+  TrendUp,
+  Users,
+} from "phosphor-react-native";
+import React, { useEffect, useRef } from "react";
+import {
+  Animated,
+  Pressable,
+  ScrollView,
   Text,
+  useWindowDimensions,
   View,
-  ViewToken,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-type MediaRow = { url: string; kind: "image" | "video" };
-type FeedPost = {
+type TileType =
+  | "hero"
+  | "category"
+  | "trending"
+  | "nearby"
+  | "expiring"
+  | "stats"
+  | "featured";
+
+type BentoItem = {
   id: string;
-  content: string;
-  post_type: string | null;
-  created_at: string;
-  expires_at: string | null;
-  post_media: MediaRow[]; // ← joined rows
+  type: TileType;
+  category?: "update" | "question" | "event" | "offer" | "help";
+  title: string;
+  subtitle?: string;
+  count?: number;
+  width: number;
+  icon: any;
+  gradient?: readonly [string, string];
+  backgroundColor?: string;
+  textColor?: string;
+  borderColor?: string;
 };
 
-// Memory-optimized video component
-const VideoComponent = React.memo(({ 
-  video, 
-  isVisible, 
-  isFocused 
-}: { 
-  video: MediaRow; 
-  isVisible: boolean;
-  isFocused: boolean;
-}) => {
-  const videoRef = useRef<Video>(null);
-  
+const TRENDING_POSTS = [
+  "Need jumper cables - Oak St",
+  "Free moving boxes available",
+  "Lost cat: orange tabby",
+  "Yard sale Saturday 9AM",
+  "Best vet recommendations?",
+  "Water outage updates",
+  "Book swap this Sunday",
+];
+
+const DEMO_DATA: BentoItem[][] = [
+  // Row 1: Hero (Primary Green) + Trending (Secondary Green)
+  [
+    {
+      id: "hero-update",
+      type: "hero",
+      category: "update",
+      title: "Road Construction Update",
+      subtitle: "Main St closed until Friday",
+      width: 8,
+      icon: Info,
+      gradient: ["#4A7043", "#2D572C"] as const,
+    },
+    {
+      id: "trending-now",
+      type: "trending",
+      title: "Trending Now",
+      subtitle: "Most active posts",
+      width: 4,
+      icon: Fire,
+      backgroundColor: "#2D572C",
+      textColor: "#ffffff",
+    },
+  ],
+  // Row 2: Light tiles with green borders (60% - main content)
+  [
+    {
+      id: "help-category",
+      type: "category",
+      category: "help",
+      title: "Community Help",
+      subtitle: "12 active requests",
+      width: 4,
+      icon: HandHeart,
+      backgroundColor: "#ffffff",
+      textColor: "#1E3A1D",
+      borderColor: "#6B8E66",
+    },
+    {
+      id: "offers-category",
+      type: "category",
+      category: "offer",
+      title: "Free Items",
+      subtitle: "8 offers available",
+      width: 4,
+      icon: Users,
+      backgroundColor: "#ffffff",
+      textColor: "#1E3A1D",
+      borderColor: "#6B8E66",
+    },
+    {
+      id: "events-category",
+      type: "category",
+      category: "event",
+      title: "Events",
+      subtitle: "3 upcoming events",
+      width: 4,
+      icon: Calendar,
+      backgroundColor: "#ffffff",
+      textColor: "#1E3A1D",
+      borderColor: "#6B8E66",
+    },
+  ],
+  // Row 3: Highlight green + White with border (30% - secondary content)
+  [
+    {
+      id: "nearby-posts",
+      type: "nearby",
+      title: "Near You",
+      subtitle: "Within 0.5 miles",
+      count: 24,
+      width: 6,
+      icon: MapPin,
+      backgroundColor: "#A9CBA4",
+      textColor: "#1E3A1D",
+    },
+    {
+      id: "expiring-soon",
+      type: "expiring",
+      title: "Expiring Soon",
+      subtitle: "Act fast!",
+      count: 5,
+      width: 6,
+      icon: Clock,
+      backgroundColor: "#ffffff",
+      textColor: "#1E3A1D",
+      borderColor: "#6B8E66",
+    },
+  ],
+  // Row 4: White with border + Primary green (30% - secondary content)
+  [
+    {
+      id: "questions-category",
+      type: "category",
+      category: "question",
+      title: "Ask Community",
+      subtitle: "15 recent questions",
+      width: 8,
+      icon: Question,
+      backgroundColor: "#ffffff",
+      textColor: "#1E3A1D",
+      borderColor: "#6B8E66",
+    },
+    {
+      id: "weekly-stats",
+      type: "stats",
+      title: "This Week",
+      subtitle: "47 new posts",
+      width: 4,
+      icon: TrendUp,
+      backgroundColor: "#4A7043",
+      textColor: "#ffffff",
+    },
+  ],
+  // Row 5: Light tiles with green borders (60% - main content)
+  [
+    {
+      id: "top-helpers",
+      type: "featured",
+      title: "Top Helpers",
+      subtitle: "Most helpful neighbors",
+      width: 6,
+      icon: Star,
+      backgroundColor: "#ffffff",
+      textColor: "#1E3A1D",
+      borderColor: "#6B8E66",
+    },
+    {
+      id: "new-neighbors",
+      type: "featured",
+      title: "New Neighbors",
+      subtitle: "Welcome them!",
+      count: 3,
+      width: 6,
+      icon: Users,
+      backgroundColor: "#ffffff",
+      textColor: "#1E3A1D",
+      borderColor: "#6B8E66",
+    },
+  ],
+  // Row 6: Mix of highlight and accent colors (10% - accent content)
+  [
+    {
+      id: "lost-found",
+      type: "category",
+      title: "Lost & Found",
+      subtitle: "2 active posts",
+      width: 4,
+      icon: MapPin,
+      backgroundColor: "#A9CBA4",
+      textColor: "#1E3A1D",
+    },
+    {
+      id: "recommendations",
+      type: "featured",
+      title: "Recommendations",
+      subtitle: "Trusted by neighbors",
+      width: 4,
+      icon: Star,
+      backgroundColor: "#ffffff",
+      textColor: "#1E3A1D",
+      borderColor: "#6B8E66",
+    },
+    {
+      id: "urgent-help",
+      type: "category",
+      title: "Urgent Help",
+      subtitle: "Needs immediate attention",
+      width: 4,
+      icon: Clock,
+      backgroundColor: "#2D572C",
+      textColor: "#ffffff",
+      borderColor: "#D4C2A6",
+    },
+  ],
+];
+
+export default function HomeScreen() {
+  const { width, height } = useWindowDimensions();
+  const padding = 16;
+  const gap = 12;
+  const availableWidth = width - padding * 2;
+
+  // Animation for trending posts
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const currentPostIndex = useRef(0);
+
   useEffect(() => {
-    // Set up audio session for video playback - more aggressive configuration
-    const setupAudio = async () => {
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-          playsInSilentModeIOS: true, // This is key for playing sound without airpods
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        });
-        console.log('Audio mode set successfully for video');
-      } catch (error) {
-        console.warn('Failed to set audio mode:', error);
-      }
+    const animateSlide = () => {
+      Animated.timing(slideAnim, {
+        toValue: -20,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(() => {
+        currentPostIndex.current =
+          (currentPostIndex.current + 1) % TRENDING_POSTS.length;
+        slideAnim.setValue(20);
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }).start();
+      });
     };
 
-    if (isVisible && isFocused) {
-      setupAudio();
+    const interval = setInterval(animateSlide, 2000);
+    return () => clearInterval(interval);
+  }, [slideAnim]);
+
+  // Calculate tile width based on grid units (12 column system)
+  const getTileWidth = (gridWidth: number) => {
+    const totalGapsInRow = 12 / gridWidth - 1;
+    return (availableWidth - gap * totalGapsInRow) / (12 / gridWidth);
+  };
+
+  const tileHeight = 120; // Same height for all tiles
+
+  const BentoTile = ({ item }: { item: BentoItem }) => {
+    const Icon = item.icon;
+    const tileWidth = getTileWidth(item.width);
+
+    // Tiles with gradients
+    if (item.gradient) {
+      return (
+        <Pressable
+          onPress={() => {
+            if (item.category) {
+              router.push(`/feed/${item.category}` as any);
+            } else if (item.type === "trending") {
+              router.push("/search" as any);
+            }
+          }}
+          style={({ pressed }) => ({
+            width: tileWidth,
+            height: tileHeight,
+            borderRadius: 16,
+            overflow: "hidden",
+            transform: [{ scale: pressed ? 0.97 : 1 }],
+            shadowColor: "#2D572C",
+            shadowOffset: { width: 0, height: pressed ? 1 : 3 },
+            shadowOpacity: pressed ? 0.15 : 0.2,
+            shadowRadius: pressed ? 4 : 10,
+            elevation: pressed ? 2 : 5,
+          })}
+        >
+          <LinearGradient
+            colors={item.gradient}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{
+              flex: 1,
+              padding: item.width >= 8 ? 20 : 16,
+              justifyContent: "space-between",
+            }}
+          >
+            <View
+              style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+            >
+              <View
+                style={{
+                  backgroundColor: "rgba(255,255,255,0.2)",
+                  borderRadius: 8,
+                  padding: 6,
+                }}
+              >
+                <Icon
+                  size={item.width >= 8 ? 20 : 18}
+                  weight="bold"
+                  color="white"
+                />
+              </View>
+              <Text
+                style={{
+                  color: "white",
+                  fontSize: item.width >= 8 ? 12 : 10,
+                  fontWeight: "600",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                }}
+              >
+                UPDATES
+              </Text>
+            </View>
+
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "flex-end",
+                justifyContent: "space-between",
+              }}
+            >
+              <View style={{ flex: 1 }}>
+                <Text
+                  style={{
+                    color: "white",
+                    fontSize: item.width >= 8 ? 18 : item.width >= 6 ? 16 : 15,
+                    fontWeight: "800",
+                    lineHeight:
+                      item.width >= 8 ? 22 : item.width >= 6 ? 20 : 18,
+                    marginBottom: 4,
+                  }}
+                >
+                  {item.title}
+                </Text>
+                {item.subtitle && (
+                  <Text
+                    style={{
+                      color: "rgba(255,255,255,0.8)",
+                      fontSize:
+                        item.width >= 8 ? 14 : item.width >= 6 ? 13 : 12,
+                      fontWeight: "500",
+                    }}
+                  >
+                    {item.subtitle}
+                  </Text>
+                )}
+              </View>
+              <Text
+                style={{
+                  color: "white",
+                  fontSize: 16,
+                  opacity: 0.8,
+                  marginLeft: 8,
+                }}
+              >
+                →
+              </Text>
+            </View>
+          </LinearGradient>
+        </Pressable>
+      );
     }
-  }, [isVisible, isFocused]);
-  
-  useEffect(() => {
-    if (!isVisible || !isFocused) {
-      // Pause and unload video when not visible or screen not focused
-      videoRef.current?.pauseAsync();
-      videoRef.current?.unloadAsync();
+
+    // Special trending tile with sliding posts
+    if (item.type === "trending") {
+      return (
+        <Pressable
+          onPress={() => router.push("/search" as any)}
+          style={({ pressed }) => ({
+            width: tileWidth,
+            height: tileHeight,
+            backgroundColor: item.backgroundColor,
+            borderRadius: 16,
+            padding: 16,
+            justifyContent: "space-between",
+            transform: [{ scale: pressed ? 0.97 : 1 }],
+            shadowColor: "#2D572C",
+            shadowOffset: { width: 0, height: pressed ? 1 : 2 },
+            shadowOpacity: pressed ? 0.1 : 0.15,
+            shadowRadius: pressed ? 3 : 6,
+            elevation: pressed ? 1 : 3,
+          })}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <View
+              style={{
+                backgroundColor: "rgba(255,255,255,0.1)",
+                borderRadius: 8,
+                padding: 6,
+              }}
+            >
+              <Icon size={16} weight="regular" color={item.textColor} />
+            </View>
+          </View>
+
+          <View style={{ flex: 1, overflow: "hidden" }}>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                marginBottom: 8,
+              }}
+            >
+              <Text
+                style={{
+                  color: item.textColor,
+                  fontSize: 13,
+                  fontWeight: "800",
+                  flex: 1,
+                }}
+              >
+                {item.title}
+              </Text>
+              <Text
+                style={{
+                  color: item.textColor,
+                  fontSize: 14,
+                  opacity: 0.8,
+                  marginLeft: 4,
+                }}
+              >
+                →
+              </Text>
+            </View>
+            <Animated.View style={{ transform: [{ translateY: slideAnim }] }}>
+              <Text
+                style={{
+                  color: item.textColor,
+                  fontSize: 10,
+                  fontWeight: "500",
+                  opacity: 0.7,
+                  lineHeight: 14,
+                }}
+                numberOfLines={2}
+              >
+                {TRENDING_POSTS[currentPostIndex.current]}
+              </Text>
+            </Animated.View>
+          </View>
+        </Pressable>
+      );
     }
-  }, [isVisible, isFocused]);
-  
-  // Don't render video component if not visible to save memory
-  if (!isVisible || !isFocused) {
+
+    // Tiles with solid colors and thin borders
     return (
-      <View
-        style={{
-          width: "100%",
-          height: 200,
-          borderRadius: 12,
-          backgroundColor: "#f1f5f9",
-          justifyContent: "center",
-          alignItems: "center",
+      <Pressable
+        onPress={() => {
+          if (item.category) {
+            router.push(`/feed/${item.category}` as any);
+          }
         }}
+        style={({ pressed }) => ({
+          width: tileWidth,
+          height: tileHeight,
+          backgroundColor: item.backgroundColor,
+          borderRadius: 16,
+          padding: 16,
+          justifyContent: "space-between",
+          transform: [{ scale: pressed ? 0.97 : 1 }],
+          shadowColor:
+            item.backgroundColor === "#ffffff" ? "#6B8E66" : "#2D572C",
+          shadowOffset: { width: 0, height: pressed ? 1 : 2 },
+          shadowOpacity: pressed ? 0.1 : 0.15,
+          shadowRadius: pressed ? 3 : 6,
+          elevation: pressed ? 1 : 3,
+          borderWidth: item.borderColor
+            ? 1
+            : item.backgroundColor === "#ffffff"
+              ? 1
+              : 0,
+          borderColor: item.borderColor || "#6B8E66",
+          opacity: item.type === "featured" ? 0.95 : 1,
+        })}
       >
-        <Text style={{ color: "#64748b" }}>Video paused</Text>
-      </View>
-    );
-  }
-  
-  return (
-    <Video
-      ref={videoRef}
-      source={{ uri: video.url }}
-      useNativeControls
-      resizeMode={ResizeMode.COVER}
-      shouldPlay={false} // Don't auto-play to save bandwidth and battery
-      isMuted={false} // Ensure video is not muted
-      volume={1.0} // Set volume to maximum
-      style={{
-        width: "100%",
-        height: 200,
-        borderRadius: 12,
-        backgroundColor: "#000",
-      }}
-      onPlaybackStatusUpdate={(status: AVPlaybackStatus) => {
-        // Handle playback errors gracefully
-        if (!status.isLoaded && status.error) {
-          console.warn("Video playback error:", status.error);
-        }
-      }}
-      onLoadStart={() => {
-        // Set audio mode when video starts loading
-        Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-          playsInSilentModeIOS: true,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        }).catch(error => console.warn('Failed to set audio mode on load start:', error));
-      }}
-      onLoad={() => {
-        // Ensure audio session is properly configured when video loads
-        Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-          playsInSilentModeIOS: true,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        }).catch(error => console.warn('Failed to set audio mode on load:', error));
-      }}
-    />
-  );
-});
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View
+            style={{
+              backgroundColor:
+                item.backgroundColor === "#ffffff"
+                  ? "#F0F4F0"
+                  : item.borderColor
+                    ? `${item.borderColor}20`
+                    : item.textColor === "#ffffff"
+                      ? "rgba(255,255,255,0.1)"
+                      : "rgba(0,0,0,0.05)",
+              borderRadius: 8,
+              padding: 8,
+            }}
+          >
+            <Icon
+              size={item.backgroundColor === "#ffffff" ? 24 : 20}
+              weight="regular"
+              color={item.borderColor || item.textColor}
+            />
+          </View>
+          {item.count && (
+            <View
+              style={{
+                backgroundColor: "#D4C2A6",
+                borderRadius: 12,
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                borderWidth: 1,
+                borderColor: "#C4B296",
+              }}
+            >
+              <Text
+                style={{
+                  color: "#1E3A1D",
+                  fontSize: 10,
+                  fontWeight: "700",
+                }}
+              >
+                {item.count}
+              </Text>
+            </View>
+          )}
+        </View>
 
-// Optimized post item component
-const PostItem = React.memo(({ 
-  item, 
-  isVisible, 
-  isFocused 
-}: { 
-  item: FeedPost; 
-  isVisible: boolean;
-  isFocused: boolean;
-}) => {
-  const images = useMemo(
-    () => item.post_media?.filter((m) => m.kind === "image") ?? [],
-    [item.post_media]
-  );
-  
-  const video = useMemo(
-    () => item.post_media?.find((m) => m.kind === "video") ?? null,
-    [item.post_media]
-  );
-  
-  return (
-    <View
-      style={{
-        backgroundColor: "#fff",
-        borderRadius: 14,
-        padding: 12,
-        borderWidth: 1,
-        borderColor: "#e5e7eb",
-      }}
-    >
-      <Text style={{ fontSize: 12, color: "#64748b", marginBottom: 6 }}>
-        {(item.post_type ?? "update").toUpperCase()}
-      </Text>
-      <Text style={{ color: "#111827" }}>{item.content}</Text>
-
-      {/* images */}
-      {images.length > 0 && (
         <View
           style={{
             flexDirection: "row",
-            gap: 8,
-            marginTop: 10,
-            flexWrap: "wrap",
+            alignItems: "flex-end",
+            justifyContent: "space-between",
           }}
         >
-          {images.map((m, i) => (
-            <Image
-              key={m.url + i}
-              source={{ uri: m.url }}
+          <View style={{ flex: 1 }}>
+            <Text
               style={{
-                width: 104,
-                height: 104,
-                borderRadius: 10,
-                borderWidth: 1,
-                borderColor: "#e5e7eb",
+                color: item.textColor,
+                fontSize: item.width >= 8 ? 16 : item.width >= 6 ? 15 : 14,
+                fontWeight: "800",
+                lineHeight: item.width >= 8 ? 20 : item.width >= 6 ? 18 : 16,
+                marginBottom: 2,
               }}
-              // Add loading optimization
-              loadingIndicatorSource={{ uri: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' }}
-            />
-          ))}
+              numberOfLines={1}
+            >
+              {item.title}
+            </Text>
+            {item.subtitle && (
+              <Text
+                style={{
+                  color: item.textColor,
+                  fontSize: item.width >= 8 ? 13 : item.width >= 6 ? 12 : 11,
+                  fontWeight: "500",
+                  opacity: 0.7,
+                }}
+                numberOfLines={1}
+              >
+                {item.subtitle}
+              </Text>
+            )}
+          </View>
+          <Text
+            style={{
+              color: item.textColor,
+              fontSize: 16,
+              opacity: 0.6,
+              marginLeft: 8,
+            }}
+          >
+            →
+          </Text>
         </View>
-      )}
-
-      {/* video */}
-      {video && (
-        <View style={{ marginTop: 10 }}>
-          <VideoComponent 
-            video={video} 
-            isVisible={isVisible} 
-            isFocused={isFocused}
-          />
-        </View>
-      )}
-
-      <Text style={{ color: "#94a3b8", marginTop: 8, fontSize: 12 }}>
-        {new Date(item.created_at).toLocaleString()}
-      </Text>
-    </View>
-  );
-});
-
-const POSTS_PER_PAGE = 20; // Reduced from 50 to improve performance
-
-export default function HomeFeed() {
-  const [loading, setLoading] = useState(true);
-  const [posts, setPosts] = useState<FeedPost[]>([]);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [visibleItems, setVisibleItems] = useState<Set<string>>(new Set());
-  
-  const isFocused = useIsFocused();
-  const channelRef = useRef<any>(null);
-  
-  // Set up global audio configuration when component mounts
-  useEffect(() => {
-    const setupGlobalAudio = async () => {
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-          playsInSilentModeIOS: true, // Critical for video audio without AirPods
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        });
-        console.log('Global audio mode configured for video playback');
-      } catch (error) {
-        console.warn('Failed to set global audio mode:', error);
-      }
-    };
-
-    setupGlobalAudio();
-  }, []);
-  
-  // Track visible items for video optimization
-  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
-    const visibleIds = new Set(viewableItems.map(item => item.item.id));
-    setVisibleItems(visibleIds);
-  }, []);
-  
-  const viewabilityConfig = useMemo(() => ({
-    itemVisiblePercentThreshold: 50, // Item must be 50% visible
-    minimumViewTime: 100, // Must be visible for 100ms
-  }), []);
-
-  const loadInitialPosts = useCallback(async () => {
-    try {
-      const { data, error } = await supabase
-        .from("posts")
-        .select(
-          "id, content, post_type, created_at, expires_at, post_media(url,kind)",
-        )
-        .eq("is_deleted", false)
-        .order("created_at", { ascending: false })
-        .limit(POSTS_PER_PAGE);
-
-      if (!error && data) {
-        setPosts(data as unknown as FeedPost[]);
-        setHasMore(data.length === POSTS_PER_PAGE);
-      }
-    } catch (error) {
-      console.error("Error loading posts:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const loadMorePosts = useCallback(async () => {
-    if (loadingMore || !hasMore || posts.length === 0) return;
-    
-    setLoadingMore(true);
-    try {
-      const lastPost = posts[posts.length - 1];
-      const { data, error } = await supabase
-        .from("posts")
-        .select(
-          "id, content, post_type, created_at, expires_at, post_media(url,kind)",
-        )
-        .eq("is_deleted", false)
-        .order("created_at", { ascending: false })
-        .lt("created_at", lastPost.created_at)
-        .limit(POSTS_PER_PAGE);
-
-      if (!error && data) {
-        setPosts(prev => [...prev, ...(data as unknown as FeedPost[])]);
-        setHasMore(data.length === POSTS_PER_PAGE);
-      }
-    } catch (error) {
-      console.error("Error loading more posts:", error);
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [loadingMore, hasMore, posts]);
-
-  useEffect(() => {
-    let mounted = true;
-    
-    const setupFeed = async () => {
-      // Check Supabase connection and auth status first
-      try {
-        console.log('Checking Supabase connection...');
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        console.log('Current session:', session ? 'authenticated' : 'not authenticated');
-        if (sessionError) {
-          console.error('Session error:', sessionError);
-        }
-        
-        // Test basic connection with a simple query
-        const { data: testData, error: testError } = await supabase
-          .from('posts')
-          .select('count')
-          .limit(1);
-        
-        if (testError) {
-          console.error('Supabase connection test failed:', testError);
-        } else {
-          console.log('Supabase connection test successful');
-        }
-      } catch (error) {
-        console.error('Error testing Supabase connection:', error);
-      }
-      
-      await loadInitialPosts();
-      
-      if (!mounted) return;
-      
-      // Only set up real-time subscription if we have a valid session or are guest
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        console.log('No session found, skipping real-time subscription');
-        return;
-      }
-      
-      // Set up real-time subscription with better error handling
-      const setupSubscription = async (retryCount = 0) => {
-        try {
-          console.log(`Setting up subscription (attempt ${retryCount + 1})`);
-          
-          channelRef.current = supabase
-            .channel(`posts-feed-${Date.now()}`) // Unique channel name
-            .on(
-              "postgres_changes",
-              { 
-                event: "INSERT", 
-                schema: "public", 
-                table: "posts",
-                filter: "is_deleted=eq.false" // Only listen for non-deleted posts
-              },
-              (payload) => {
-                console.log('Real-time update received:', payload);
-                if (mounted) {
-                  setPosts((p) => [{ ...(payload.new as any), post_media: [] }, ...p]);
-                }
-              },
-            )
-            .subscribe((status) => {
-              console.log('Feed subscription status:', status);
-              if (status === 'SUBSCRIBED') {
-                console.log('✅ Feed subscription active');
-              } else if (status === 'CHANNEL_ERROR') {
-                console.error('❌ Feed subscription error');
-                // Stop retrying after 2 attempts to avoid infinite loops
-                if (retryCount < 2 && mounted) {
-                  setTimeout(() => {
-                    if (channelRef.current) {
-                      supabase.removeChannel(channelRef.current);
-                      channelRef.current = null;
-                    }
-                    setupSubscription(retryCount + 1);
-                  }, 3000 * (retryCount + 1)); // Longer delays
-                } else {
-                  console.log('Max retries reached, giving up on real-time subscription');
-                }
-              } else if (status === 'CLOSED') {
-                console.log('Feed subscription closed');
-              } else if (status === 'TIMED_OUT') {
-                console.log('Feed subscription timed out');
-                if (retryCount < 2 && mounted) {
-                  setTimeout(() => {
-                    if (channelRef.current) {
-                      supabase.removeChannel(channelRef.current);
-                      channelRef.current = null;
-                    }
-                    setupSubscription(retryCount + 1);
-                  }, 5000);
-                }
-              }
-            });
-        } catch (error) {
-          console.error("Error setting up real-time subscription:", error);
-          // Only retry on error if we haven't exceeded retry limit
-          if (retryCount < 2 && mounted) {
-            setTimeout(() => setupSubscription(retryCount + 1), 3000 * (retryCount + 1));
-          }
-        }
-      };
-      
-      setupSubscription();
-    };
-    
-    setupFeed();
-
-    return () => {
-      mounted = false;
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
-        channelRef.current = null;
-      }
-    };
-  }, [loadInitialPosts]);
-  
-  // Cleanup videos when screen loses focus
-  useEffect(() => {
-    if (!isFocused) {
-      setVisibleItems(new Set());
-    }
-  }, [isFocused]);
-
-  const renderItem = useCallback(({ item }: { item: FeedPost }) => (
-    <PostItem 
-      item={item} 
-      isVisible={visibleItems.has(item.id)} 
-      isFocused={isFocused}
-    />
-  ), [visibleItems, isFocused]);
-
-  const keyExtractor = useCallback((item: FeedPost) => item.id, []);
-
-  const renderFooter = useCallback(() => {
-    if (!loadingMore) return null;
-    return (
-      <View style={{ padding: 20, alignItems: "center" }}>
-        <ActivityIndicator />
-      </View>
+      </Pressable>
     );
-  }, [loadingMore]);
+  };
 
-  if (loading) {
-    return (
-      <SafeAreaView
-        style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
-      >
-        <ActivityIndicator />
-      </SafeAreaView>
-    );
-  }
-
-  if (!posts.length) {
-    return (
-      <SafeAreaView
-        style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
-      >
-        <Text style={{ color: "#64748b" }}>No posts yet. Be the first!</Text>
-      </SafeAreaView>
-    );
-  }
-
-  const Content = (
-    <Screen edges={["top"]}>
-      <FlatList
-        contentContainerStyle={{ padding: 12, gap: 10 }}
-        data={posts}
-        keyExtractor={keyExtractor}
-        renderItem={renderItem}
-        onEndReached={loadMorePosts}
-        onEndReachedThreshold={0.5}
-        ListFooterComponent={renderFooter}
-        onViewableItemsChanged={onViewableItemsChanged}
-        viewabilityConfig={viewabilityConfig}
-        removeClippedSubviews={true}
-        maxToRenderPerBatch={10}
-        windowSize={10}
-        initialNumToRender={10}
-        getItemLayout={undefined} // Let FlatList calculate automatically for variable heights
+  return (
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: "#F5F7F5" }}
+      edges={["top", "left", "right"]}
+    >
+      <Header
+        title="Vicin"
+        onPressSearch={() => router.push("/search" as any)}
+        onPressNotifications={() => console.log("Notifications")}
+        onPressProfile={() => router.push("/(tabs)/profile" as any)}
       />
-    </Screen>
-  )
 
-  return Platform.OS === "android" ? (
-    <SafeAreaView style={{ flex: 1 }} edges={["top", "left", "right"]}>
-      {Content}
+      <ScrollView
+        contentContainerStyle={{
+          padding,
+          paddingBottom: 100,
+        }}
+        showsVerticalScrollIndicator={false}
+      >
+        {DEMO_DATA.map((row, rowIndex) => (
+          <View
+            key={`row-${rowIndex}`}
+            style={{
+              flexDirection: "row",
+              gap,
+              marginBottom: gap,
+              width: availableWidth,
+            }}
+          >
+            {row.map((item) => (
+              <BentoTile key={item.id} item={item} />
+            ))}
+          </View>
+        ))}
+      </ScrollView>
     </SafeAreaView>
-  ) : (
-    Content
   );
 }
