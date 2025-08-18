@@ -2,7 +2,7 @@
 import Screen from "@/components/Screen";
 import { supabase } from "@/lib/supabase";
 import { useIsFocused } from "@react-navigation/native";
-import { AVPlaybackStatus, ResizeMode, Video } from "expo-av";
+import { Audio, AVPlaybackStatus, ResizeMode, Video } from "expo-av";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -38,6 +38,28 @@ const VideoComponent = React.memo(({
   const videoRef = useRef<Video>(null);
   
   useEffect(() => {
+    // Set up audio session for video playback - more aggressive configuration
+    const setupAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          playsInSilentModeIOS: true, // This is key for playing sound without airpods
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+        console.log('Audio mode set successfully for video');
+      } catch (error) {
+        console.warn('Failed to set audio mode:', error);
+      }
+    };
+
+    if (isVisible && isFocused) {
+      setupAudio();
+    }
+  }, [isVisible, isFocused]);
+  
+  useEffect(() => {
     if (!isVisible || !isFocused) {
       // Pause and unload video when not visible or screen not focused
       videoRef.current?.pauseAsync();
@@ -70,6 +92,8 @@ const VideoComponent = React.memo(({
       useNativeControls
       resizeMode={ResizeMode.COVER}
       shouldPlay={false} // Don't auto-play to save bandwidth and battery
+      isMuted={false} // Ensure video is not muted
+      volume={1.0} // Set volume to maximum
       style={{
         width: "100%",
         height: 200,
@@ -81,6 +105,26 @@ const VideoComponent = React.memo(({
         if (!status.isLoaded && status.error) {
           console.warn("Video playback error:", status.error);
         }
+      }}
+      onLoadStart={() => {
+        // Set audio mode when video starts loading
+        Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        }).catch(error => console.warn('Failed to set audio mode on load start:', error));
+      }}
+      onLoad={() => {
+        // Ensure audio session is properly configured when video loads
+        Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        }).catch(error => console.warn('Failed to set audio mode on load:', error));
       }}
     />
   );
@@ -178,6 +222,26 @@ export default function HomeFeed() {
   
   const isFocused = useIsFocused();
   const channelRef = useRef<any>(null);
+  
+  // Set up global audio configuration when component mounts
+  useEffect(() => {
+    const setupGlobalAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          playsInSilentModeIOS: true, // Critical for video audio without AirPods
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+        console.log('Global audio mode configured for video playback');
+      } catch (error) {
+        console.warn('Failed to set global audio mode:', error);
+      }
+    };
+
+    setupGlobalAudio();
+  }, []);
   
   // Track visible items for video optimization
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {

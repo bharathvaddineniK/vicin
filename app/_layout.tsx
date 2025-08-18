@@ -1,4 +1,5 @@
 import { ensureMyProfile } from "@/lib/profile";
+import { Audio } from "expo-av";
 import type { Href } from "expo-router";
 import { SplashScreen, Stack, useRouter } from "expo-router";
 import { useEffect, useRef } from "react";
@@ -10,6 +11,25 @@ import { useSession } from "../lib/session";
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
+  // Set up global audio configuration for video playback
+  useEffect(() => {
+    const setupGlobalAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          playsInSilentModeIOS: true, // Critical for video audio without AirPods
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+        console.log('Global audio mode configured at app level');
+      } catch (error) {
+        console.warn('Failed to set global audio mode at app level:', error);
+      }
+    };
+
+    setupGlobalAudio();
+  }, []);
 
 
   if (__DEV__ && Platform.OS === "android") {

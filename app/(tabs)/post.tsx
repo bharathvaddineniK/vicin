@@ -3,14 +3,17 @@ import LocationPicker, { Coords, LocationMode } from "@/components/LocationPicke
 import MediaUploader, { MediaItem } from "@/components/MediaUploader";
 import Screen from "@/components/Screen";
 import { PerfMarker, useFps, useRenderCounter } from "@/hooks/perf";
+import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { deleteDraft, DraftData, saveDraft } from "@/lib/drafts";
 import { getOneShot } from "@/lib/location";
 import { useSession } from "@/lib/session";
 import { supabase } from "@/lib/supabase";
 import { useIsFocused } from "@react-navigation/native";
 import { router } from "expo-router";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -132,9 +135,76 @@ export default function CreatePost() {
   const [venueLabel, setVenueLabel] = useState<string>("");
   const [venueCoords, setVenueCoords] = useState<Coords>(null);
 
+  // Draft state
+  const [draftLoaded, setDraftLoaded] = useState(false);
+
   // Computed values
   const remaining = MAX_CONTENT_LENGTH - content.length;
   const canPost = !busy && !hasInFlight && content.trim().length >= 1 && content.trim().length <= MAX_CONTENT_LENGTH;
+
+  // Check if there are unsaved changes - more sensitive detection
+  const hasUnsavedChanges = useMemo(() => {
+    // Check each field individually for any changes from default state
+    const hasContent = content.trim().length > 0;
+    const hasPostTypeChange = postType !== "update";
+    const hasTags = tags.length > 0;
+    const hasLocationChange = locationMode !== "subject";
+    const hasVenueLabel = venueLabel.trim().length > 0;
+    const hasVenueCoords = venueCoords !== null;
+    const hasCallEnabled = callEnabled !== false;
+    const hasExpiryChange = expiry.key !== DEFAULT_EXPIRY.key;
+    const hasCustomDays = customDays.length > 0;
+    const hasMediaChanges = readyMedia.length > 0;
+    const hasMediaInFlight = hasInFlight; // Include in-flight media uploads
+
+    // Log for debugging (remove in production)
+    if (__DEV__) {
+      const changes = {
+        hasContent,
+        hasPostTypeChange,
+        hasTags,
+        hasLocationChange,
+        hasVenueLabel,
+        hasVenueCoords,
+        hasCallEnabled,
+        hasExpiryChange,
+        hasCustomDays,
+        hasMediaChanges,
+        hasMediaInFlight,
+      };
+      const hasAnyChanges = Object.values(changes).some(Boolean);
+      if (hasAnyChanges) {
+        console.log('Draft changes detected:', changes);
+      }
+    }
+
+    return (
+      hasContent ||
+      hasPostTypeChange ||
+      hasTags ||
+      hasLocationChange ||
+      hasVenueLabel ||
+      hasVenueCoords ||
+      hasCallEnabled ||
+      hasExpiryChange ||
+      hasCustomDays ||
+      hasMediaChanges ||
+      hasMediaInFlight
+    );
+  }, [content, postType, tags, locationMode, venueLabel, venueCoords, callEnabled, expiry, customDays, readyMedia, hasInFlight]);
+
+  // Draft data for saving
+  const draftData: DraftData = useMemo(() => ({
+    content: content.trim(),
+    post_type: postType,
+    tags,
+    location_mode: locationMode,
+    venue_label: venueLabel.trim(),
+    venue_coords: venueCoords,
+    call_enabled: callEnabled,
+    expiry_hours: expiry.hours,
+    custom_days: customDays,
+  }), [content, postType, tags, locationMode, venueLabel, venueCoords, callEnabled, expiry, customDays]);
 
   // Helper functions
   const getCoarseType = useCallback((type: PostType): "update" | "event" | "question" | "help" => {
@@ -155,9 +225,62 @@ export default function CreatePost() {
     setCustomDays("");
     setShowCustom(false);
     setTags([]);
+    // Reset location
+    setLocationMode("subject");
+    setVenueLabel("");
+    setVenueCoords(null);
     // Reset media by incrementing the trigger
     setMediaResetTrigger(prev => prev + 1);
   }, []);
+
+  // Mark draft as loaded without auto-loading or deleting (drafts should only load when explicitly opened from profile)
+  useEffect(() => {
+    if (session && !draftLoaded) {
+      setDraftLoaded(true);
+    }
+  }, [session, draftLoaded]);
+
+  // Draft protection handlers
+  const handleSaveDraft = useCallback(async (data: DraftData) => {
+    try {
+      console.log('Attempting to save draft:', data);
+      const draftId = await saveDraft(data);
+      console.log('Draft saved successfully with ID:', draftId);
+    } catch (error) {
+      console.error('Error saving draft:', error);
+      throw error; // Re-throw so the error handling in useDraftProtection works
+    }
+  }, []);
+
+  const handleDiscardDraft = useCallback(() => {
+    resetForm();
+    // Only clear the form - don't delete existing drafts from database
+    // Drafts should only be deleted when explicitly managed or after successful post
+  }, [resetForm]);
+
+  // Use draft protection hook
+  const { checkBeforeNavigation } = useDraftProtection({
+    hasUnsavedChanges,
+    draftData,
+    onSaveDraft: handleSaveDraft,
+    onDiscardDraft: handleDiscardDraft,
+  });
+
+  // Register draft protection with global system
+  useEffect(() => {
+    if (isFocused) {
+      // Register when post screen is focused
+      (global as any).setDraftProtection?.(checkBeforeNavigation);
+    } else {
+      // Unregister when post screen loses focus
+      (global as any).setDraftProtection?.(null);
+    }
+
+    return () => {
+      // Cleanup on unmount
+      (global as any).setDraftProtection?.(null);
+    };
+  }, [isFocused, checkBeforeNavigation]);
 
   // Media handlers
   const handleMediaStateChange = useCallback((inFlight: boolean) => {
@@ -231,6 +354,8 @@ export default function CreatePost() {
       }
 
       resetForm();
+      // Delete draft after successful post
+      deleteDraft().catch(error => console.error('Failed to delete draft:', error));
       Alert.alert("Posted!", "Your post is live.");
     } catch (e: any) {
       Alert.alert("Couldn't post", e?.message ?? "Try again.");
@@ -269,10 +394,14 @@ export default function CreatePost() {
     <Screen edges={["top"]}>
       <KeyboardAvoidingView 
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
+        <ScrollView 
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <Text style={{ fontSize: 22, fontWeight: "800" }}>New post</Text>
             <LocationPicker
@@ -319,6 +448,11 @@ export default function CreatePost() {
               multiline
               textAlignVertical="top"
               style={styles.textInput}
+              returnKeyType="done"
+              blurOnSubmit={true}
+              onSubmitEditing={() => {
+                Keyboard.dismiss();
+              }}
             />
             <View style={styles.inputFooter}>
               <Text style={[
@@ -425,7 +559,11 @@ export default function CreatePost() {
                     style={styles.customInput}
                     autoFocus={true}
                     returnKeyType="done"
-                    onSubmitEditing={handleCustomExpiry}
+                    blurOnSubmit={true}
+                    onSubmitEditing={() => {
+                      handleCustomExpiry();
+                      Keyboard.dismiss();
+                    }}
                   />
                   <View style={styles.customActions}>
                     <Pressable
