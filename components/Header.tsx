@@ -27,7 +27,7 @@ export default function Header({
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-        backgroundColor: "#f8fafc",
+        backgroundColor: "#F5F7F5",
       }}
       accessibilityRole="header"
     >
